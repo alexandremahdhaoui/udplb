@@ -1,0 +1,21 @@
+---
+# -- lb host config
+ifname: "%s"  # this will be formatted to tap{0,1,2}. # TODO: use gotemplates.
+ip: 10.0.0.123  # TODO: change to 1.1.1.1 or something
+port: 12345
+
+# -- backend specs.
+backends:
+  - enabled: true
+    ip: 10.0.0.10  # tap0
+    mac: 00:00:00:00:00:00
+    port: 8080
+  - enabled: true
+    ip: 10.0.0.11  # tap1
+    mac: 00:00:00:00:00:00
+    port: 8080
+  - enabled: true
+    ip: 10.0.0.12  # tap2
+    mac: 00:00:00:00:00:00
+    port: 8080
+

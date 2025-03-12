@@ -1,0 +1,105 @@
+---
+hostNetdevs:
+  # -- Publicly facing net
+
+  - name: br0  # public router
+    type: bridge
+    ip: 10.0.0.1/24
+
+  - name: tap0-0
+    type: tap
+    master: br0
+  - name: tap0-1
+    type: tap
+    master: br0
+  - name: tap0-2
+    type: tap
+    master: br0
+
+  # -- Private net
+
+  - name: br1  # private router
+    type: bridge
+    ip: 172.16.0.1/24
+
+  - name: tap1-0
+    type: tap
+    link: br1
+  - name: tap1-1
+    type: tap
+    link: br1
+  - name: tap1-2
+    type: tap
+    link: br1
+
+# Each defined recorder will be a loadbalancer backend.
+vms:
+  baseImage: test/.tmp.nocloud_alpine.qcow2
+  cloudInitTpl: test/cloud-init.tpl.yaml
+  specs:
+    - name: vm0-lb  # the vm's hostname
+      # QUESTION: should we define macvlans dynamically? 
+      # We should be able to add/enable/disable/delete recorders dynamically for test purposes.
+      # TODO: create:
+      #   type Agent interface {
+      #       Add(recorder ) error
+      #       Delete() error
+      #       Enable() error
+      #       Disable() error
+      #   }
+      netdevs:
+        - name: eth0  # "public" net
+          type: eth
+          hostNetdev: br0-tap1
+          ip: 10.0.0.10/24
+        - name: eth1  # private net
+          type: eth
+          # ip: 172.16.0.10/24
+          hostNetdev: br1-tap0
+        - name: macvlan0  # recorder 0-0
+          # No overlay we just use macvlan for simplicity
+          # ip link add link DEVICE name NAME type { macvlan | macvtap } mode { vepa | bridge }
+          type: macvlan
+          ip: 172.16.0.1/24
+        - name: macvlan1  # recorder 0-1
+          type: macvlan
+          ip: 172.16.0.1/24
+
+      udplb:
+        enabled: true
+        netdev: eth0
+        ip: 1.1.1.1
+      recorders:
+        - name: rec0-0
+          netdev: br0
+          ip: 172.16.0.100/24
+        - name: rec0-1
+          netdev: br0
+          ip: 172.16.0.101/24
+
+    - name: vm1-lb
+      hostsLoadbalancer: true
+      ip: 10.0.0.11/24
+      recorders:
+        - name: rec1-0
+          ip: 172.16.0.110/24
+        - name: rec1-1
+          ip: 172.16.0.111/24
+
+    - name: vm2-lb
+      hostsLoadbalancer: true
+      ip: 10.0.0.12/24
+      recorders:
+        - name: rec2-0
+          ip: 172.16.0.120/24
+        - name: rec2-1
+          ip: 172.16.0.121/24
+
+    - name: vm3-nolb
+      hostsLoadbalancer: false
+      ip: 10.0.0.13/24
+      recorders:
+        - name: rec2-0
+          ip: 172.16.0.120/24
+        - name: rec2-1
+          ip: 172.16.0.121/24

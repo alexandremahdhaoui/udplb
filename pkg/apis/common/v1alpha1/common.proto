@@ -1,0 +1,102 @@
+/*
+ * Copyright 2025 Alexandre Mahdhaoui
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+package commonv1alpha1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/alexandremahdhaoui/udplb/pkg/apis/common/v1alpha1;commonv1alpha1";
+
+// -----------------------------------------------------
+// -- ERROR
+// -----------------------------------------------------
+
+enum ErrorType {
+    // Represents an unknown or unhandled error type.  A value of Unknown
+    // indicates that the received ErrorType was not recognized by the system.
+    // This is used for validation purposes: if ErrorType is Unknown, a
+    // validation error should be raised.  This helps ensure that all error
+    // conditions are explicitly handled.
+    Unknown = 0;
+
+    // A general runtime error occurred. This could be due to unexpected issues,
+    // such as network problems, server errors, or internal bugs.
+    Runtime = 1;
+
+    // The request lacks valid authentication credentials.
+    Authentication = 2;
+
+    // The requester is not authorized to perform this action.
+    Authorization = 3;
+
+    // The request data failed validation checks (e.g., format, range).
+    Validation = 4;
+
+    // The request data is structurally valid but violates business logic or
+    // consistency rules (e.g., attempting to open an already open door).
+    Semantic = 5;
+
+    // The client has exceeded its allowed request rate.
+    RateLimiting = 6;
+}
+
+message Error {
+    repeated TypedError errors = 1;
+    message TypedError {
+        ErrorType type = 1;
+        string error = 2;
+    }
+
+    ResponseMetadata metadata = 2;
+}
+
+// -----------------------------------------------------
+// -- REQUEST METADATA
+// -----------------------------------------------------
+
+message RequestMetadata {
+    string requestId = 1; // uuid
+    string traceId = 2;
+    google.protobuf.Timestamp timestamp = 3;
+}
+
+// -----------------------------------------------------
+// -- RESPONSE METADATA
+// -----------------------------------------------------
+
+message ResponseMetadata {
+    string traceId = 2;
+    google.protobuf.Timestamp timestamp = 3;
+}
+
+// -----------------------------------------------------
+// -- RESOURCE METADATA
+// -----------------------------------------------------
+
+message ResourceMetadata {
+    // The unique identifier of a resource.
+    string id = 1;
+
+    // MarkedForDeletion is used to delete an entry from
+    // the associated map.
+    bool MarkedForDeletion = 2;
+}
+
+// -----------------------------------------------------
+// -- MAPPED SESSIONS
+// -----------------------------------------------------

@@ -1,0 +1,19 @@
+---
+name: udplb
+
+kindenv:
+  kubeconfigPath: .ignore.kindenv.kubeconfig.yaml
+
+# -- localContainerRegistry will create if enabled a container registry in the kindenv using the kubeconfig which path
+#    is defined by {.kindenv.kubeconfigPath}.
+localContainerRegistry:
+  # -- enabled defines whether the local container registry must be created or not.
+  enabled: false
+  # -- creadentialPath defines the output file containing the container registry credentials.
+  credentialPath: .ignore.local-container-registry.yaml
+  # -- path to CA certificate.
+  caCrtPath: .ignore.ca.crt
+  # -- namespace where the local container registry will be deployed.
+  namespace: local-container-registry
+
+oapiCodegenHelper: {}

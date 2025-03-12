@@ -1,0 +1,4 @@
+[config] # Base configuration; these are considered stable and should not change
+include_paths = ["pkg/apis/*"] # Include paths to look for protofiles during parsing
+disable_parse_diagnostics = false # Disable diagnostics for parsing
+
