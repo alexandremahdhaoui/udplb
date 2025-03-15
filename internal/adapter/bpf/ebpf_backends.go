@@ -125,14 +125,14 @@ func (lb *udplb) availableBackends() []Backend {
 		availableBackends = append(availableBackends, backend)
 	}
 
-	// sort availableBackends alphabetically by Id. (it makes this algo deterministic).
+	// sort availableBackends alphabetically by HashedId. (it makes algorithm deterministic).
 	slices.SortFunc(availableBackends, func(a, b Backend) int {
 		switch {
 		default:
 			return 0
-		case a.Id.String() < b.Id.String():
+		case a.HashedId() < b.HashedId():
 			return -1
-		case a.Id.String() > b.Id.String():
+		case a.HashedId() > b.HashedId():
 			return 1
 		}
 	})

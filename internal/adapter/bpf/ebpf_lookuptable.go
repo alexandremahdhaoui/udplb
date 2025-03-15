@@ -45,7 +45,7 @@ func ShardedLookupTable(availableBackends []Backend, lookupTableLength Prime) ([
 	panic("unimplemented")
 }
 
-var fib = []int{1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1587, 2584, 4181}
+var fib = []uint64{1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1587, 2584, 4181}
 
 // Populates a robust lookup table.
 //
@@ -63,7 +63,7 @@ var fib = []int{1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1
 // The algorithm will compute the lookup table by:
 // - Initializing each Bi such that: lup[Hi] = Bi.Id
 // - Using the NaiveFib algorithm to set the next available entry in the map.
-func ImprovedFibLookupTable(
+func RobustFibLookupTable(
 	availableBackends []*Backend,
 	lookupTableLength Prime,
 ) (keys []uint64, values []string) {
@@ -76,22 +76,42 @@ func ImprovedFibLookupTable(
 
 	// evenly distribute map.
 	distribution := make(map[uint64]uint64, n)
-	var banned uint64
-	// banList := make(map[uint64]struct{}, n)
+	banned := make(map[uint64]struct{}, n)
 	for j := range n {
 		distribution[j] = m / n
 	}
 
+	// lookup table
+	lup := make(map[uint64]string, m)
+
 	// M[j] holds the latest index of B[j]
 	M := make([]uint64, n)
 	for j := range n {
-		M[j] = availableBackends[j].HashedId() % m
+		mod := availableBackends[j].HashedId() % m
+		M[j] = mod
+
+		// fill this entry.
+		lup[mod] = availableBackends[j].Id.String()
+		distribution[j] -= 1
 	}
 
-	lup := make(map[uint64]string, m)
 	for i := range len(fib) {
 		for j := range n {
+			if uint64(len(banned)) == n {
+				goto exitLoop
+			}
+
+			if distribution[j] < 1 {
+				continue
+			}
+
 			for range fib[i] {
+				if distribution[j] < 1 {
+					// ensure the map is evenly distributed.
+					banned[j] = struct{}{}
+					break
+				}
+
 				Mj := M[j] + 1
 				for { // until we find an empty slot.
 					if Mj > m-1 {
@@ -108,24 +128,100 @@ func ImprovedFibLookupTable(
 				M[j] = Mj
 				lup[Mj] = availableBackends[j].Id.String()
 				distribution[j] -= 1
-				if distribution[j] < 1 {
-					// ensure the map is evenly distributed.
-					banned += 1
-					break
-				}
-			}
-
-			if distribution[j] < 1 {
-				if banned == n {
-					break
-				}
-
-				continue
 			}
 		}
+	}
 
-		if banned == n {
+exitLoop:
+	// fill reamining fields.
+	var i, j uint64
+	for i = 0; i < n; i++ {
+		if j > rem-1 {
 			break
+		}
+
+		if _, ok := lup[i]; ok {
+			// until we find an empty slot.
+			continue
+		}
+
+		lup[i] = availableBackends[j].Id.String()
+		j++
+	}
+
+	// make into outputformat.
+	keys = make([]uint64, m)
+	values = make([]string, m)
+	for k, v := range lup {
+		keys[k] = k
+		values[k] = v
+	}
+
+	return keys, values
+}
+
+func RobustSimpleLookupTable(
+	availableBackends []*Backend,
+	lookupTableLength Prime,
+) (keys []uint64, values []string) {
+	// let n the number of available backends.
+	n := uint64(len(availableBackends))
+	// let m the length of the lookup table
+	m := uint64(lookupTableLength)
+	// let rem the remainder of m/n.
+	rem := m % n
+
+	// evenly distribute map.
+	distribution := make(map[uint64]uint64, n)
+	banned := make(map[uint64]struct{})
+	for j := range n {
+		distribution[j] = m / n
+	}
+
+	// lookup table
+	lup := make(map[uint64]string, m)
+
+	// M[j] holds the latest index of B[j]
+	M := make([]uint64, n)
+	for j := range n {
+		mod := availableBackends[j].HashedId() % m
+		M[j] = mod
+
+		// fill this entry.
+		lup[mod] = availableBackends[j].Id.String()
+		distribution[j] -= 1
+	}
+
+	// populate lup
+	for {
+		if uint64(len(banned)) == n {
+			break
+		}
+
+		for j := range n {
+			if distribution[j] < 1 {
+				// ensure the map is evenly distributed.
+				banned[j] = struct{}{}
+				continue
+			}
+
+			Mj := M[j] + 1
+
+			for { // until we find an empty slot.
+				if Mj > m-1 {
+					Mj = 0 // start again from 0 if we exceded lookup table's length.
+				}
+
+				if _, ok := lup[Mj]; !ok {
+					break
+				}
+
+				Mj++
+			}
+
+			M[j] = Mj
+			lup[Mj] = availableBackends[j].Id.String()
+			distribution[j] -= 1
 		}
 	}
 
@@ -166,36 +262,41 @@ func ImprovedFibLookupTable(
 //
 // TODO: Implement the maglev lookup table algo instead.
 // TODO: we must lock the lookup table while the table is being updated.
-func NaiveFibLookupTable(availableBackends []Backend, lookupTableLength int) error {
+func NaiveFibLookupTable(
+	availableBackends []*Backend,
+	lookupTableLength Prime,
+) (keys []uint64, values []string) {
 	// TODO: improve this to make less disruption when a backend is down or a new
 	// backend is added. The idea is to shard the lookup table, and assign each
 	// backend to one to many shards deterministically. When a backend becomes down
 	// the other backends will take over its shards, without changing previously
 	// held shards.
 
-	n := len(availableBackends)
-	m := int(lookupTableLength)
+	var n, m, j, k, currentEntry uint64
 
-	j := 0 // fib index
-	k := 0 // counter < fib[j]
-	currentEntry := 0
+	n = uint64(len(availableBackends))
+	m = uint64(lookupTableLength)
+
+	j = 0 // fib index
+	k = 0 // counter < fib[j]
+	currentEntry = 0
 
 	// evenly distribute map.
 	banned := 0
-	banList := make(map[int]struct{}, n)
-	distribution := make(map[int]int, n)
+	banList := make(map[uint64]struct{}, n)
+	distribution := make(map[uint64]uint64, n)
 	for i := range n {
 		// Ensure there is always an unbanned entry in order to
 		// fill the `m % n` remaining entries.
 		distribution[i] = (m / n) + 1
 	}
 
-	keys := make([]int, m)
-	values := make([]Backend, m)
+	keys = make([]uint64, m)
+	values = make([]string, m)
 
 	for i := range m {
 		keys[i] = i
-		values[i] = availableBackends[currentEntry]
+		values[i] = availableBackends[currentEntry].Id.String()
 
 		// ensure the map is evenly distributed
 		distribution[currentEntry] -= 1
@@ -222,7 +323,7 @@ func NaiveFibLookupTable(availableBackends []Backend, lookupTableLength int) err
 		// reset currentEntry && update fib index (j).
 		currentEntry = 0
 		j += 1
-		if j < len(fib)-1 {
+		if j < uint64(len(fib)-1) {
 			// reset fib index (j) if we exceed it.
 			j = 0
 		}
@@ -232,5 +333,21 @@ func NaiveFibLookupTable(availableBackends []Backend, lookupTableLength int) err
 		}
 	}
 
-	return nil
+	return keys, values
+}
+
+func SimpleLookupTable(
+	availableBackends []*Backend,
+	lookupTableLength Prime,
+) (keys []uint64, values []string) {
+	m := uint64(lookupTableLength)
+	keys = make([]uint64, m)
+	values = make([]string, m)
+
+	for i := range m {
+		keys[i] = i
+		values[i] = availableBackends[i%uint64(len(availableBackends))].Id.String()
+	}
+
+	return keys, values
 }
