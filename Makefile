@@ -108,7 +108,11 @@ fmt:
 UDPLB_DIR       := $(ROOT)/cmd/udplb
 BUILD_DIR       := $(ROOT)/build
 UDPLB_BUILD_DIR := $(BUILD_DIR)/$(PROJECT)
-UDPLB_BIN  	    := $(UDPLB_BIN)/$(PROJECT).o # e.g. ./build/udplb/udplb.o
+UDPLB_BIN  	    := $(UDPLB_BUILD_DIR)/$(PROJECT).o # e.g. ./build/udplb/udplb.o
+
+.PHONY: clean
+clean:
+	find . -name '*.o' -exec bash -c 'echo Removing {}... && rm {} ' ';'
 
 .PHONY: build
 build: generate fmt

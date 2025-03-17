@@ -1,6 +1,8 @@
 # udplb
 
-Go version of the udplb.
+UDPLB is a UDP Loadbalancer written in Go & C leveraging BPF XDP for performance.
+
+TODO: train small nn to check if we can beat `RobustFib` lookup table algorithm.
 
 ## Goals
 
