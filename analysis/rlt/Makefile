@@ -36,42 +36,11 @@ $(BENCHMARK_CSV): $(BENCHMARK_LOG) ## Parse benchmark logs
 parse: $(BENCHMARK_CSV)
 
 # -------------------------------------------------------------- #
-# -- PLOT
-# -------------------------------------------------------------- #
-
-PLOT_PATH := ./cmd/plot
-
-plot: $(BENCHMARK_CSV)
-	$(GO_RUN) $(PLOT_PATH) $(BENCHMARK_CSV)
-
-
-# -------------------------------------------------------------- #
 # -- notebook
 # -------------------------------------------------------------- #
 
-GO_VERSION := $(shell go version | sed 's/.*\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/')
+NOTEBOOK_IMAGE := quay.io/jupyter/pytorch-notebook:latest
 
-GONB_REPO    := github.com/janpfeifer/gonb
-GONB_PATH    := ${GOPATH}/src/$(GONB_REPO)
-GONB_VERSION := v0.10.11
-GONB_IMAGE   := alexandremahdhaoui/gonb:$(GONB_VERSION)
-
-$(GONB_REPO)/.git:
-	mkdir -p $(GONB_PATH)
-	cd $(GONB_PATH); \
-		git clone "https://$(GONB_REPO).git" .; \
-		git checkout $(GONB_VERSION)
-
-build-notebook: $(GONB_REPO)/.git
-	sed -i 's/go 1.23/go 1.24/' $(GONB_PATH)/go.mod 
-	cd $(GONB_PATH) && \
-		go mod tidy && \
-		go get github.com/marcboeker/go-duckdb
-	docker build -t $(GONB_IMAGE) --build-arg GO_VERSION=$(GO_VERSION) -f $(GONB_PATH)/Dockerfile $(GONB_PATH)
-
-notebook: build-notebook
-	docker run -it --rm -p 8888:8888 -v "$(ROOT):/notebooks" $(GONB_IMAGE)
-
-new-notebook:
-	docker run --rm -p 8888:8888 quay.io/jupyter/pytorch-notebook:latest
+notebook: $(BENCHMARK_CSV)
+	docker run --rm -p 8888:8888 -v "$(ROOT):/home/jovyan" $(NOTEBOOK_IMAGE) 
 
