@@ -5,6 +5,8 @@ NPROC := $(shell nproc)
 # -- TOOLS
 # -------------------------------------------------------------- #
 
+CONTAINER_ENGINE ?= docker
+
 GO_RUN  := go run
 GO_TEST := go test -v -cpu=$(NPROC) --timeout=180m
 
@@ -39,8 +41,31 @@ parse: $(BENCHMARK_CSV)
 # -- notebook
 # -------------------------------------------------------------- #
 
-NOTEBOOK_IMAGE := quay.io/jupyter/pytorch-notebook:latest
+NOTEBOOK_IMAGE := alexandremahdhaoui/notebook-rlt:latest
 
-notebook: $(BENCHMARK_CSV)
-	docker run --rm -p 8888:8888 -v "$(ROOT):/home/jovyan" $(NOTEBOOK_IMAGE) 
+NEW_AUTH_TOKEN     := $(shell uuidgen)
+CONTAINER_RUN_FILE := .ignore.notebook-running
+CONTAINER_NAME     := jupyterlab-rlt
+CONTAINER_CMD      := start-notebook.sh --NotebookApp.token='$(NEW_AUTH_TOKEN)'
+
+build-notebook:
+	$(CONTAINER_ENGINE) build -t $(NOTEBOOK_IMAGE) -f Containerfile .
+
+$(CONTAINER_RUN_FILE): build-notebook
+	$(CONTAINER_ENGINE) run -d -p 8888:8888 -v "$(ROOT):/home/jovyan/udplb" --name $(CONTAINER_NAME) $(NOTEBOOK_IMAGE) $(CONTAINER_CMD)
+	@echo -n "$(NEW_AUTH_TOKEN)" > $(CONTAINER_RUN_FILE)
+	@echo Running container...
+	@sleep 3
+
+notebook: $(BENCHMARK_CSV) $(CONTAINER_RUN_FILE)
+	@$(CONTAINER_ENGINE) start $(CONTAINER_NAME) || true
+	@xdg-open "http://localhost:8888/lab?token=$(shell cat $(CONTAINER_RUN_FILE))"
+	@echo "Opening: http://localhost:8888/lab?token=$(shell cat $(CONTAINER_RUN_FILE))"
+
+# docker container exec jupyterlab-rlt jupyter server list
+
+rm-notebook:
+	$(CONTAINER_ENGINE) ps -a | grep $(CONTAINER_NAME) | awk '{print $$1}' | xargs docker container kill || true
+	$(CONTAINER_ENGINE) ps -a | grep $(CONTAINER_NAME) | awk '{print $$1}' | xargs docker rm || true
+	rm $(CONTAINER_RUN_FILE)
 

@@ -1,0 +1,22 @@
+FROM quay.io/jupyter/pytorch-notebook:latest
+
+RUN pip install --no-cache-dir jupyterlab-vim 'python-lsp-server[all]' && \
+    fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
+
+RUN mamba install --yes jupysql pandas matplotlib duckdb-engine && \
+    mamba clean --all -f -y && \
+    fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
+
+RUN mkdir -p /home/jovyan/.jupyter/lab/user-settings/share/jupyter/lab/settings && \
+    cat <<EOF | tee /home/jovyan/.jupyter/lab/user-settings/share/jupyter/lab/settings/overrides.json
+{
+  "@jupyterlab/apputils-extension:themes": {
+    "theme": "JupyterLab Dark"
+  }
+}
+EOF
+
+RUN fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
