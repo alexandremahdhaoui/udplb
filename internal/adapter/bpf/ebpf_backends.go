@@ -72,7 +72,7 @@ func NewBackend(
 	status BackendStatus,
 	isMarkedForDeletion bool,
 ) *Backend {
-	h := sha256.Sum256([]byte(id.String()))
+	h := sha256.Sum256([]byte(id[:]))
 	i := binary.NativeEndian.Uint64(h[24:32])
 
 	return &Backend{

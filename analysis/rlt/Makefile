@@ -57,7 +57,7 @@ $(CONTAINER_RUN_FILE): build-notebook
 	@echo Running container...
 	@sleep 3
 
-notebook: $(BENCHMARK_CSV) $(CONTAINER_RUN_FILE)
+notebook: $(BENCHMARK_CSV) # $(CONTAINER_RUN_FILE)
 	@$(CONTAINER_ENGINE) start $(CONTAINER_NAME) || true
 	@xdg-open "http://localhost:8888/lab?token=$(shell cat $(CONTAINER_RUN_FILE))"
 	@echo "Opening: http://localhost:8888/lab?token=$(shell cat $(CONTAINER_RUN_FILE))"
