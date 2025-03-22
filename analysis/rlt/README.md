@@ -13,7 +13,8 @@ The `RLT` algorithm is defined in `internal/adapter/bpf/ebpf_lookuptable.go`.
 
 The goal is to replace the Robust algorithm with a deep learning model.
 
-![rlt AI model notebook](./rlt-ai.ipynb)
+* ![First notebook](./rlt-ai-0.ipynb)
+* ![Second notebook: coordinate prediction approach](./rlt-ai-1.ipynb)
 
 This algorithm must refactored. Calculating a loss from the current output might
 be difficult.
