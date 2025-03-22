@@ -15,3 +15,6 @@ The goal is to replace the Robust algorithm with a deep learning model.
 
 ![rlt AI model notebook](./rlt-ai.ipynb)
 
+This algorithm must refactored. Calculating a loss from the current output might
+be difficult.
+
