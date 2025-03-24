@@ -1,7 +1,6 @@
 # udplb
 
-UDPLB is an AI based UDP Loadbalancer leveraging eBPF & XDP.
-UDPLB is written in Go & C.
+UDPLB is an opiniated UDP Loadbalancer leveraging eBPF & XDP.
 
 TODO: train small nn to check if we can beat `RobustFib` lookup table algorithm.
 
