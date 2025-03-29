@@ -2,8 +2,6 @@
 
 UDPLB is an opiniated UDP Loadbalancer leveraging eBPF & XDP.
 
-TODO: train small nn to check if we can beat `RobustFib` lookup table algorithm.
-
 ## Goals
 
 The goal of `udplb` is to loadbalance traffic from a customer to the right
