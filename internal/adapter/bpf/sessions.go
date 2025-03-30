@@ -21,6 +21,29 @@ import (
 	"github.com/google/uuid"
 )
 
+type Sessions interface {
+	// Put one session mapping into the "MappedSessions" lookup table.
+	// It looks the data structure and update it.
+	Put(ctx context.Context, item SessionBackendMapping) error
+
+	// Delete on session mapping.
+	// It looks the data structure and update it.
+	Delete(ctx context.Context, id uuid.UUID) error
+
+	// Overwrites the mapped sessions map.
+	// Calling SetMappedSessions with m equal to nil will empty the
+	// map.
+	// It looks the data structure and update it.
+	Reset(ctx context.Context, m MappedSessions) error
+}
+
+// -------------------------------------------------------------------
+// -- sessionMap (concrete implementation)
+// -------------------------------------------------------------------
+
+// --
+// TODO: refactor below
+
 type (
 	MappedSessions = map[uuid.UUID]uuid.UUID
 

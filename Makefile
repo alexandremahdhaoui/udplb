@@ -44,6 +44,7 @@ KINDENV             := KINDENV_ENVS="$(KINDENV_ENVS)" $(TOOLING)/kindenv@$(TOOLI
 LOCAL_CONTAINER_REG := $(TOOLING)/local-container-registry@$(TOOLING_VERSION)
 OAPI_CODEGEN_HELPER := OAPI_CODEGEN="$(OAPI_CODEGEN)" $(TOOLING)/oapi-codegen-helper@$(TOOLING_VERSION)
 TEST_GO             := GOTESTSUM="$(GOTESTSUM)" $(TOOLING)/test-go@$(TOOLING_VERSION)
+LINT_LICENSES       := ./hacks/find-files-without-licenses.sh
 
 CLEAN_MOCKS := rm -rf ./internal/util/mocks
 
@@ -133,6 +134,7 @@ run: generate
 
 .PHONY: lint
 lint:
+	$(LINT_LICENSES)
 	$(GOLANGCI_LINT) run --fix
 
 # ------------------------------------------------------------------------------------------------------------- #

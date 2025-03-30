@@ -30,10 +30,6 @@ import (
 // -------------------------------------------------------------------
 
 type UDPLB interface {
-	// ---------------------------------------------------------------
-	// -- General operations.
-	// ---------------------------------------------------------------
-
 	// Run udplb bpf program. Please note SetBackends or SetBackend must
 	// be called at least once.
 	Run(ctx context.Context) error
@@ -41,26 +37,15 @@ type UDPLB interface {
 	// Logs bpf traces to stdout.
 	TraceBPF() error
 
-	// ---------------------------------------------------------------
-	// -- BPF data structures operations.
-	// ---------------------------------------------------------------
-
-	// Put one backend into the backends map.
-	SetBackend(ctx context.Context, item Backend) error
-
-	// Overwrites the backends map.
-	// Calling SetBackends with list equal to nil is not supported and
-	// will throw an error.
-	SetBackends(ctx context.Context, list []Backend) error
-
-	// Put one SessionBackendMapping into the MappedSessions map.
-	SetSessionBackendMapping(ctx context.Context, item SessionBackendMapping) error
-
-	// Overwrites the mapped sessions map.
-	// Calling SetMappedSessions with m equal to nil will empty the
-	// map.
-	SetMappedSessions(ctx context.Context, m MappedSessions) error
+	// Return an interface to manage bpf backend configuration.
+	Backends() Backends
+	// Return an interface to manage bpf session configuration.
+	Sessions() Sessions
 }
+
+// ---------------------------------------------------------------
+// -- BPF data structures operations.
+// ---------------------------------------------------------------
 
 // -------------------------------------------------------------------
 // -- udplb (concrete implementation)
