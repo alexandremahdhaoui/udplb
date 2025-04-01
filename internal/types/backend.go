@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// Must be constructed from diverse source of kubernetes resources.
 func NewBackend(
 	id uuid.UUID,
 	spec BackendSpec,

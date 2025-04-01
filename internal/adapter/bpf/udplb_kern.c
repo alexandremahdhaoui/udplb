@@ -24,7 +24,18 @@
 #include <linux/byteorder/little_endian.h>
 #include <linux/if_ether.h>
 
-#include "udplb_helpers.c"
+#include "udplb_kern_helpers.c"
+
+/**************************************************************************
+ * FOR LAYER 2 LOADBALANCING:
+ * https://docs.ebpf.io/linux/program-type/BPF_PROG_TYPE_XDP/
+ *
+ *   The packet can be redirected to egress on a different interface than
+ *   where it entered (like XDP_TX but for a different interface).
+ *   This can be done using the bpf_redirect helper (not recommended) or
+ *   the bpf_redirect_map helper in combination with a BPF_MAP_TYPE_DEVMAP
+ *   or BPF_MAP_TYPE_DEVMAP_HASH map.
+ **************************************************************************/
 
 // The loadbalancer's IP is checked to decide if a packet must be loadbalanced.
 // UDPLB_IP must be specified by using host's endianness.

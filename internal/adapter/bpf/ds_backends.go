@@ -19,8 +19,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"sync"
-	"time"
 
 	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
@@ -28,15 +26,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// NB: The name of this file (i.e. ds_backends.go) stands for `"backends" data structure`.
+
 // TODO: REFACTOR "Backends" INTO "DataStructures". IT SHOULD TAKE THE
 // RESPONSIBILITY OF ALL BPF DATA STRUCTURES.
 // -- OR:
 // THIS BACKENDS INTERFACE MUST HOLD A REFERENCE TO AN "eventCh chan<- event" FROM THE
 // "bpf.DataStructures" INTERFACE. IT WOULD THEN PUSH EVENTS TO THAT CHANNEL.
 type Backends interface {
-	// Done returns a channel that's closed when this interface has been
-	// gracefully shut down.
-	Done() <-chan struct{}
+	types.DoneCloser
 
 	// Deletes one backend from the map.
 	// It locks the data structure on the bpf side and update it.
@@ -54,10 +52,10 @@ type Backends interface {
 	Reset(ctx context.Context, list []types.Backend) error
 }
 
-func NewBackends(eventCh chan<- event) Backends {
+func NewBackends(mgr DataStructureManager) Backends {
 	return &backends{
 		backends: make(map[uuid.UUID]*types.Backend),
-		eventCh:  eventCh,
+		eventCh:  mgr.GetEventChannel(),
 		doneCh:   make(chan struct{}),
 	}
 }
@@ -122,61 +120,6 @@ func (b *backends) Put(ctx context.Context, item types.Backend) error {
 // Reset implements Backends.
 func (b *backends) Reset(ctx context.Context, list []types.Backend) error {
 	panic("unimplemented")
-}
-
-// This loop ensures that only one goroutine is updating the internal and bpf data
-// structures at a time. This synchronization pattern avoids using mutexes. Hence,
-// we do not lock these datastructures, and changes are propagated as quickly as
-// possible.
-//
-// Please note this function must be executed only once. If the struct was gracefully
-// shut down and you want to start it again, then you must initialize another struct.
-//
-// TODO: THIS FUNCTION SHOULD CHECK SEMANTIC MUTATION OF ALL INTERNAL DATA STRUCTURES.
-// TODO: THIS FUNCTION MUST BE MOVED TO THE "DataStructures" CONCRETE IMPLEMENTATION.
-func (b *backends) eventLoop() {
-	// actually the function f must be stored somewhere on the struct.
-	f := sync.OnceFunc(func() {}) // TODO
-eventLoop:
-	for {
-		events := make([]event, 0, 8)
-		debounceCh := time.After(b.eventDebounceDuration)
-
-	debounceLoop:
-		for {
-			// TODO: Add case where global context is canceled for graceful shutdown.
-			select {
-			// receive an event.
-			case e := <-b.eventCh:
-				events = append(events, e)
-			// break debounce loop after duration.
-			case _ = <-debounceCh:
-				break debounceLoop
-			// break the event loop for graceful shutdown.
-			case _ = <-b.ctx.Done():
-				break eventLoop
-			}
-		}
-
-		semanticMutation := false
-		// perform event
-		for _, e := range events {
-			switch e.Type {
-			case eventTypeDelete:
-			case eventTypePut:
-			case eventTypeReset:
-			}
-		}
-
-		// Skip sync if the above changes implies no semantic change such as deleting
-		// a backend that was previously in state Unavailable.
-		if !semanticMutation {
-			break debounceLoop // Next debounce iteration.
-		}
-
-		// sync datastructures
-		b.sync()
-	}
 }
 
 // --
