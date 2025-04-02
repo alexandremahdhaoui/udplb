@@ -128,45 +128,32 @@ func (mgr *dsManager) Start() error {
 //
 // TODO: THIS FUNCTION SHOULD CHECK SEMANTIC MUTATION OF ALL INTERNAL DATA STRUCTURES.
 func (mgr *dsManager) eventLoop() {
-eventLoop:
 	for {
-		events := make([]event, 0, 8)
-		var debounceCh <-chan time.Time
+		var e Event
 
-	debounceLoop:
-		for {
-			// TODO: Add case where global context is canceled for graceful shutdown.
-			select {
-			// receive an event.
-			case e := <-mgr.eventCh:
-				events = append(events, e)
-				if debounceCh == nil {
-					// starts the debounce duration after receiving the first event.
-					debounceCh = time.After(mgr.eventLoopDebounceDuration)
-				}
-			// break debounce loop after duration.
-			case _ = <-debounceCh:
-				break debounceLoop
-			// break the event loop for graceful shutdown.
-			case _ = <-mgr.doneCh:
-				break eventLoop
-			}
+		select {
+		// receive an event.
+		case e = <-mgr.eventCh:
+		// break the event loop for graceful shutdown.
+		case _ = <-mgr.terminateCh:
+			close(mgr.doneCh)
+			break
+		case _ = <-mgr.doneCh:
+			break
 		}
 
 		semanticMutation := false
 		// perform event
-		for _, e := range events {
-			switch e.Type {
-			case eventTypeDelete:
-			case eventTypePut:
-			case eventTypeReset:
-			}
+		switch e.Type {
+		case eventTypeDelete:
+		case eventTypePut:
+		case eventTypeReset:
 		}
 
 		// Skip sync if the above changes implies no semantic change such as deleting
 		// a backend that was previously in state Unavailable.
 		if !semanticMutation {
-			break debounceLoop // Continue to n.ext debounce iteration.
+			continue
 		}
 
 		// sync datastructures

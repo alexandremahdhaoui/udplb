@@ -18,29 +18,15 @@ package bpfadapter
 import (
 	"context"
 
+	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/google/uuid"
 )
 
-// NB: The name of this file (i.e. ds_sessions.go) stands for `"sessions" data structure`.
-
 type Sessions interface {
-	// Done returns a channel that's closed when this interface has been
-	// gracefully shut down.
-	Done() <-chan struct{}
-
-	// Put one session mapping into the "MappedSessions" lookup table.
-	// It locks the data structure on the bpf side and update it.
-	Put(ctx context.Context, item SessionBackendMapping) error
-
-	// Delete on session mapping.
-	// It locks the data structure on the bpf side and update it.
-	Delete(ctx context.Context, id uuid.UUID) error
+	types.DoneCloser
 
 	// Overwrites the mapped sessions map.
-	// Calling SetMappedSessions with m equal to nil will empty the
-	// map.
-	// It locks the data structure on the bpf side and update it.
-	Reset(ctx context.Context, m MappedSessions) error
+	Set(ctx context.Context, m MappedSessions) error
 }
 
 // -------------------------------------------------------------------

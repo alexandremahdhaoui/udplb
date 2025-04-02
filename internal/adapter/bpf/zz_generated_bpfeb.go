@@ -20,6 +20,12 @@ type udplbBackendSpec struct {
 	_       [3]byte
 }
 
+type udplbConfigT struct {
+	Ip   uint32
+	Port uint16
+	_    [2]byte
+}
+
 // loadUdplb returns the embedded CollectionSpec for udplb.
 func loadUdplb() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_UdplbBytes)
@@ -76,8 +82,7 @@ type udplbMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type udplbVariableSpecs struct {
-	UDPLB_IP   *ebpf.VariableSpec `ebpf:"UDPLB_IP"`
-	UDPLB_PORT *ebpf.VariableSpec `ebpf:"UDPLB_PORT"`
+	Config     *ebpf.VariableSpec `ebpf:"config"`
 	N_backends *ebpf.VariableSpec `ebpf:"n_backends"`
 }
 
@@ -114,8 +119,7 @@ func (m *udplbMaps) Close() error {
 //
 // It can be passed to loadUdplbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type udplbVariables struct {
-	UDPLB_IP   *ebpf.Variable `ebpf:"UDPLB_IP"`
-	UDPLB_PORT *ebpf.Variable `ebpf:"UDPLB_PORT"`
+	Config     *ebpf.Variable `ebpf:"config"`
 	N_backends *ebpf.Variable `ebpf:"n_backends"`
 }
 

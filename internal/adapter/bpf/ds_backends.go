@@ -26,30 +26,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// NB: The name of this file (i.e. ds_backends.go) stands for `"backends" data structure`.
-
-// TODO: REFACTOR "Backends" INTO "DataStructures". IT SHOULD TAKE THE
-// RESPONSIBILITY OF ALL BPF DATA STRUCTURES.
-// -- OR:
-// THIS BACKENDS INTERFACE MUST HOLD A REFERENCE TO AN "eventCh chan<- event" FROM THE
-// "bpf.DataStructures" INTERFACE. IT WOULD THEN PUSH EVENTS TO THAT CHANNEL.
 type Backends interface {
 	types.DoneCloser
 
-	// Deletes one backend from the map.
-	// It locks the data structure on the bpf side and update it.
-	Delete(ctx context.Context, id uuid.UUID) error
-
-	// Put one backend into the backends map.
-	// It creates or update an existing backend.
-	// It locks the data structure on the bpf side and update it.
-	Put(ctx context.Context, item types.Backend) error
-
 	// Overwrites the backends map.
-	// Calling SetBackends with list equal to nil is not supported and
-	// will throw an error.
-	// It locks the data structure on the bpf side and update it.
-	Reset(ctx context.Context, list []types.Backend) error
+	Set(ctx context.Context, list []types.Backend) error
 }
 
 func NewBackends(mgr DataStructureManager) Backends {

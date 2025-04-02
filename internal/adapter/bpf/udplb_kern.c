@@ -37,13 +37,19 @@
  *   or BPF_MAP_TYPE_DEVMAP_HASH map.
  **************************************************************************/
 
-// The loadbalancer's IP is checked to decide if a packet must be loadbalanced.
-// UDPLB_IP must be specified by using host's endianness.
-volatile const __u32 UDPLB_IP;
+struct config_t {
+    // The loadbalancer's IP is checked to decide if a packet must be
+    // loadbalanced. The config.ip endianness must be in the host's.
+    __u32 ip;
+    // The loadbalancer's port is checked to decide if a packet must be
+    // loadbalanced.
+    __u16 port;
+};
 
-// The loadbalancer's port is checked to decide if a packet must be
-// loadbalanced.
-volatile const __u16 UDPLB_PORT;
+// The config is a const. If users wants to update the loadbalancer's config
+// they must rollout a new deployment, or start a new process specifying the
+// new config.
+volatile const struct config_t config;
 
 // Number of backends defined in the "backends" bpf map.
 //
@@ -79,7 +85,7 @@ int udplb(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
 
     // validate packet length and checks if packet is IP and UDP.
-    if (!must_loadbalance(data, data_end, UDPLB_IP, UDPLB_PORT))
+    if (!must_loadbalance(data, data_end, config.ip, config.port))
         return XDP_PASS;
 
     struct ethhdr *ethh = data;

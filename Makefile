@@ -71,7 +71,7 @@ FORCE_REBUILD:
 
 BPF_GOPACKAGE := bpfadapter
 BPF_DIR       := $(ROOT)/internal/adapter/bpf
-BPF_FILE      := $(BPF_DIR)/$(PROJECT).c
+BPF_FILE      := $(BPF_DIR)/$(PROJECT)_kern.c
 BPF2GO_OPTS   := --go-package $(BPF_GOPACKAGE) -tags linux --output-dir $(BPF_DIR) --output-stem zz_generated
 
 .PHONY: generate

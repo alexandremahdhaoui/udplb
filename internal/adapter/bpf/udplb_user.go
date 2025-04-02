@@ -39,16 +39,6 @@ type UDPLB interface {
 
 	// Logs bpf traces to stdout.
 	TraceBPF() error
-
-	// TODO: move that to its own adapter that can be initialized using
-	// the chan obtained from UDPLB.GetEventChannel.
-	// Return an interface to manage bpf backend configuration.
-	Backends() Backends
-
-	// TODO: move that to its own adapter that can be initialized using
-	// the chan obtained from UDPLB.GetEventChannel.
-	// Return an interface to manage bpf session configuration.
-	Sessions() Sessions
 }
 
 // -------------------------------------------------------------------
@@ -66,21 +56,12 @@ type udplb struct {
 	port uint16
 	// Network interface the XDP program will attach to.
 	iface *net.Interface
-
-	// -- data structures
-
-	// List of backends.
-	backends []Backend
-	// Known SessionBackendMapping.
-	// This datastructure should only hold a max amount of entries.
-	// Old entries must be garbage collected.
-	mappedSessions MappedSessions
+	// Length of the backend lookup table.
+	lookupTableLength Prime
 
 	// -- bpf
 
 	objs udplbObjects
-	// Length of the backend lookup table.
-	lookupTableLength Prime
 }
 
 // -------------------------------------------------------------------
