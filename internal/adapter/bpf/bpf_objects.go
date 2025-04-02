@@ -78,6 +78,8 @@ func NewObjects(prog UDPLB) (Objects, error) {
 // to read from.
 //
 // This is a sort of a blue/green deployment of the new data structure.
+// This solution simplifies error handling as it ensures the whole data
+// structure is atomically updated from the bpf program point of view.
 
 // Wraps bpf objects with a convenient interface for testing.
 type BPFArray[T any] interface {
@@ -89,95 +91,145 @@ type BPFArray[T any] interface {
 	//	  - SET a.length.
 	//	  - a.oldLen = newLen.
 	Reset(values []T) error
+
+	// ResetAndDeferSwitchover updates the passive internal map but does
+	// not perform the switchover.
+	//
+	// It allows users to "pseudo-atomically" update multiple BPF data
+	// structures from the bpf-program point of view, by sharing the same
+	// "activePointer" bpf variable with multiple BPF data structures.
+	//
+	// ResetAndDeferSwitchover returns a function that can be called once to
+	// perform the switchover.
+	// The returned function can only be called once.
+	// Please note that the returned function will retry if errors are
+	// encountered.
+	//
+	// The deferable switchover function must be called, even if the same
+	// "activePointer" bpf variable is used for multiple data structures.
+	// The deferable switchover function must be called because it updates
+	// internal variables in userspace.
+	ResetAndDeferSwitchover(values []T) (func(), error)
 }
 
 type bpfArray[T any] struct {
-	obj *ebpf.Map
+	// both active and passive maps.
+	a, b *ebpf.Map
+	// We save a few syscalls by caching `{a,b}len` instead of reading the bpf variable.
+	aLenCache, bLenCache uint32
+	// the bpf variable storing the length of the respective a or b map.
+	aLen, bLen *ebpf.Variable
 
-	// We save a few syscalls by storing it instead of reading the bpf variable.
-	oldLen uint32
-	lenObj *ebpf.Variable
-
-	// This is not really a spinlock, it's a variable that can be set to 1 if locked.
-	spinlock *ebpf.Variable
+	// activeMapPointer must be defined in the bpf program as __u8.
+	// - When set to 0, the "active map" is `a` & the "active length" is `aLen`.
+	// - When set to 1, the "active map" is `b` & the "active length" is `bLen`.
+	activePointer *ebpf.Variable
+	// We save a few syscalls by caching `activeMap` value instead of reading the
+	// bpf variable.
+	activePointerCache int
 }
 
 // Reset implements BPFMap.
-func (a *bpfArray[T]) Reset(values []T) error {
+func (arr *bpfArray[T]) Reset(values []T) error {
 	keys := make([]uint32, len(values))
 	for i := range len(values) {
 		keys[i] = uint32(i)
 	}
 
-	a.lock()
-	defer a.unlock()
+	passiveMap := arr.getPassiveMap()
 
 	// - UPDATE_BATCH all entries with index in the interval [0, old_length].
-	if _, err := a.obj.BatchUpdate(keys, values, nil); err != nil {
+	if _, err := passiveMap.BatchUpdate(keys, values, nil); err != nil {
 		return err
 	}
 
-	// - DELETE all entries in the *ebpf.Map that have index > new_length.
-	// - PUT all entries with index in the interval [old_length, new_length].
+	oldLen := arr.getActiveLenCache()
 	newLen := uint32(len(values))
+
 	switch {
 	default:
 		return nil // return early if length did not change.
-	case a.oldLen > newLen:
-		keys := make([]uint32, 0, a.oldLen-newLen) // TODO
-		for i := newLen; i < a.oldLen; i++ {
+	case oldLen > newLen:
+		// - DELETE all entries in the *ebpf.Map that have index > new_length.
+		keys := make([]uint32, 0, oldLen-newLen) // TODO
+		for i := newLen; i < oldLen; i++ {
 			keys = append(keys, i)
 		}
 
-		if _, err := a.obj.BatchDelete(keys, nil); err != nil {
+		if _, err := passiveMap.BatchDelete(keys, nil); err != nil {
 			return err
 		}
-	case a.oldLen < newLen:
-		for i := a.oldLen; i < newLen; i++ {
-			if err := a.obj.Put(i, values[i]); err != nil {
+	case oldLen < newLen:
+		// - PUT all entries with index in the interval [old_length, new_length].
+		for i := oldLen; i < newLen; i++ {
+			if err := passiveMap.Put(i, values[i]); err != nil {
 				return err
 			}
 		}
 	}
 
 	// Update length
-	a.oldLen = newLen
-	if err := a.lenObj.Set(newLen); err != nil {
+	if err := arr.setPassiveLenVar(newLen); err != nil {
+		return err
+	}
+
+	if err := arr.switchover(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-const lockBackoff = 10
-
-const (
-	unlocked uint8 = 0
-	locked   uint8 = 1
-)
-
-func (a *bpfArray[T]) lock() {
-	var err error
-	for range lockBackoff {
-		err = a.spinlock.Set(locked)
-		if err == nil {
-			return
-		}
+func (arr *bpfArray[T]) switchover() error {
+	newActive := 1 - arr.activePointerCache
+	if err := arr.activePointer.Set(newActive); err != nil {
+		return err
 	}
 
-	panic("CRITICAL ERROR")
+	arr.activePointerCache = newActive
+	return nil
 }
 
-func (a *bpfArray[T]) unlock() {
-	var err error
-	for range lockBackoff {
-		err = a.spinlock.Set(unlocked)
-		if err == nil {
-			return
-		}
+func (arr *bpfArray[T]) getPassiveMap() *ebpf.Map {
+	if arr.activePointerCache == 0 {
+		return arr.b
 	}
 
-	panic("CRITICAL ERROR")
+	return arr.a
+}
+
+func (arr *bpfArray[T]) getPassiveLenVar() *ebpf.Variable {
+	if arr.activePointerCache == 0 {
+		return arr.bLen
+	}
+
+	return arr.aLen
+}
+
+func (arr *bpfArray[T]) getActiveLenCache() uint32 {
+	if arr.activePointerCache == 0 {
+		return arr.aLenCache
+	}
+
+	return arr.bLenCache
+}
+
+func (arr *bpfArray[T]) setPassiveLenVar(newLen uint32) error {
+	if arr.activePointerCache == 0 {
+		if err := arr.bLen.Set(newLen); err != nil {
+			return err
+		}
+
+		arr.bLenCache = newLen
+		return nil
+	}
+
+	if err := arr.aLen.Set(newLen); err != nil {
+		return err
+	}
+
+	arr.aLenCache = newLen
+	return nil
 }
 
 func NewBPFArray[T any](obj *ebpf.Map, lenObj, spinlock *ebpf.Variable) (BPFArray[T], error) {
