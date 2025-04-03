@@ -16,14 +16,15 @@ type udplbBackendSpec struct {
 	Ip      uint32
 	Port    uint16
 	Mac     [6]uint8
-	Enabled bool
+	Enabled uint8
 	_       [3]byte
 }
 
 type udplbConfigT struct {
-	Ip   uint32
-	Port uint16
-	_    [2]byte
+	Ip              uint32
+	Port            uint16
+	_               [2]byte
+	LookupTableSize uint32
 }
 
 // loadUdplb returns the embedded CollectionSpec for udplb.
@@ -75,15 +76,22 @@ type udplbProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type udplbMapSpecs struct {
-	Backends *ebpf.MapSpec `ebpf:"backends"`
+	BackendsA    *ebpf.MapSpec `ebpf:"backends_a"`
+	BackendsB    *ebpf.MapSpec `ebpf:"backends_b"`
+	LookupTableA *ebpf.MapSpec `ebpf:"lookup_table_a"`
+	LookupTableB *ebpf.MapSpec `ebpf:"lookup_table_b"`
 }
 
 // udplbVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type udplbVariableSpecs struct {
-	Config     *ebpf.VariableSpec `ebpf:"config"`
-	N_backends *ebpf.VariableSpec `ebpf:"n_backends"`
+	ActivePointer    *ebpf.VariableSpec `ebpf:"active_pointer"`
+	BackendsA_len    *ebpf.VariableSpec `ebpf:"backends_a_len"`
+	BackendsB_len    *ebpf.VariableSpec `ebpf:"backends_b_len"`
+	Config           *ebpf.VariableSpec `ebpf:"config"`
+	LookupTableA_len *ebpf.VariableSpec `ebpf:"lookup_table_a_len"`
+	LookupTableB_len *ebpf.VariableSpec `ebpf:"lookup_table_b_len"`
 }
 
 // udplbObjects contains all objects after they have been loaded into the kernel.
@@ -106,12 +114,18 @@ func (o *udplbObjects) Close() error {
 //
 // It can be passed to loadUdplbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type udplbMaps struct {
-	Backends *ebpf.Map `ebpf:"backends"`
+	BackendsA    *ebpf.Map `ebpf:"backends_a"`
+	BackendsB    *ebpf.Map `ebpf:"backends_b"`
+	LookupTableA *ebpf.Map `ebpf:"lookup_table_a"`
+	LookupTableB *ebpf.Map `ebpf:"lookup_table_b"`
 }
 
 func (m *udplbMaps) Close() error {
 	return _UdplbClose(
-		m.Backends,
+		m.BackendsA,
+		m.BackendsB,
+		m.LookupTableA,
+		m.LookupTableB,
 	)
 }
 
@@ -119,8 +133,12 @@ func (m *udplbMaps) Close() error {
 //
 // It can be passed to loadUdplbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type udplbVariables struct {
-	Config     *ebpf.Variable `ebpf:"config"`
-	N_backends *ebpf.Variable `ebpf:"n_backends"`
+	ActivePointer    *ebpf.Variable `ebpf:"active_pointer"`
+	BackendsA_len    *ebpf.Variable `ebpf:"backends_a_len"`
+	BackendsB_len    *ebpf.Variable `ebpf:"backends_b_len"`
+	Config           *ebpf.Variable `ebpf:"config"`
+	LookupTableA_len *ebpf.Variable `ebpf:"lookup_table_a_len"`
+	LookupTableB_len *ebpf.Variable `ebpf:"lookup_table_b_len"`
 }
 
 // udplbPrograms contains all programs after they have been loaded into the kernel.

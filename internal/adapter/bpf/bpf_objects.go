@@ -15,18 +15,13 @@
  */
 package bpfadapter
 
-import (
-	"github.com/alexandremahdhaoui/udplb/internal/types"
-)
-
 // -------------------------------------------------------------------
 // -- OBJECTS
 // -------------------------------------------------------------------
 
 // Wraps the following ebpf objects with a convenient interface for testing.
 type Objects struct {
-	Backends    BPFMap[uint32, udplbBackendSpec]
-	Config      BPFVariable[udplbConfigT]
+	Backends    BPFMap[uint32, *udplbBackendSpec]
 	LookupTable BPFArray[uint32]
 }
 
@@ -35,31 +30,28 @@ func NewObjects(prog UDPLB) (Objects, error) {
 	if !ok {
 		return Objects{}, ErrCannotCreateObjectsFromUnknownUDPLBImplementation
 	}
+	objs := concrete.objs
 
-	// concrete.objs.udplbMaps.Backends
-	backends, err := NewBPFMap[uint32, udplbBackendSpec](
-		a, b,
-		aLen, bLen,
-		activePointer,
+	backends, err := NewBPFMap[uint32, *udplbBackendSpec](
+		objs.BackendsA, objs.BackendsB,
+		objs.BackendsA_len, objs.BackendsB_len,
+		objs.ActivePointer,
 	)
-	if err != nil {
-		return Objects{}, err
-	}
-
-	cfg, err := NewBPFVariable[udplbConfigT](concrete.objs.udplbVariables.Config)
 	if err != nil {
 		return Objects{}, err
 	}
 
 	lup, err := NewBPFArray[uint32](
-		a, b,
-		aLen, bLen,
-		activePointer,
+		objs.LookupTableA, objs.LookupTableB,
+		objs.LookupTableA_len, objs.LookupTableB_len,
+		objs.ActivePointer,
 	)
+	if err != nil {
+		return Objects{}, err
+	}
 
 	return Objects{
 		Backends:    backends,
-		Config:      cfg,
 		LookupTable: lup,
 	}, nil
 }
@@ -68,33 +60,50 @@ func NewObjects(prog UDPLB) (Objects, error) {
 // -- FAKE OBJECTS
 // -------------------------------------------------------------------
 
+var (
+	_ BPFArray[any]       = &FakeBPFArray[any]{}
+	_ BPFMap[uint32, any] = &FakeBPFMap[uint32, any]{}
+	_ BPFVariable[any]    = &FakeBPFVariable[any]{}
+)
+
 func NewFakeObjects() Objects {
 	return Objects{
 		Backends:    NewFakeBackends(),
 		LookupTable: NewFakeLookupTable(),
-		Config:      NewFakeVariable(T),
-		N_backends:  NewFakeVariable(T),
 	}
 }
+
+// -------------------------------------------------------------------
+// -- FAKE BPF ARRAY
+// -------------------------------------------------------------------
+
+type 
 
 // -------------------------------------------------------------------
 // -- FAKE BPF MAP
 // -------------------------------------------------------------------
 
-type FakeBackends struct {
-	Map map[uint32]*types.Backend
+type FakeBPFMap[K comparable, V any] struct {
+	Map map[K]V
 }
 
-// Reset implements BPFMap.
-func (m FakeBackends) Reset(map[uint32]*types.Backend) {
-	// - deletes all xor keys if they exist in the bpf map.
-	// - updates in batch all existing elements.
-	// - put each xor keys of the input map.
-	panic("unimplemented")
+// Set implements BPFMap.
+func (m *FakeBPFMap[K, V]) Set(kv map[K]V) error {
+	m.Map = kv
+	return nil
 }
 
-func NewFakeBackends() BPFMap[uint32, *types.Backend] {
-	return FakeBackends{Map: make(map[uint32]*types.Backend)}
+// SetAndDeferSwitchover implements BPFMap.
+func (m *FakeBPFMap[K, V]) SetAndDeferSwitchover(kv map[K]V) (func(), error) {
+	return func() {
+		m.Map = kv
+	}, nil
+}
+
+func NewFakeBackends() *FakeBPFMap[uint32, *udplbBackendSpec] {
+	return &FakeBPFMap[uint32, *udplbBackendSpec]{
+		Map: make(map[uint32]*udplbBackendSpec),
+	}
 }
 
 // -------------------------------------------------------------------
@@ -106,10 +115,11 @@ type FakeBPFVariable[T any] struct {
 }
 
 // Set implements BPFVariable.
-func (f *FakeBPFVariable[T]) Set(v T) {
-	panic("unimplemented")
+func (v *FakeBPFVariable[T]) Set(newVar T) error {
+	v.v = newVar
+	return nil
 }
 
-func NewFakeVariable[T any](v T) BPFVariable[T] {
+func NewFakeVariable[T any](v T) *FakeBPFVariable[T] {
 	return &FakeBPFVariable[T]{v}
 }

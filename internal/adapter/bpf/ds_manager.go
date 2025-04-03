@@ -62,7 +62,6 @@ func NewDataStructureManager(objs Objects) DataStructureManager {
 // -------------------------------------------------------------------
 
 type dsManager struct {
-	// TODO
 	objs Objects
 
 	started     bool
@@ -125,8 +124,6 @@ func (mgr *dsManager) Start() error {
 //
 // Please note this function must be executed only once. If the struct was gracefully
 // shut down and you want to start it again, then you must initialize another struct.
-//
-// TODO: THIS FUNCTION SHOULD CHECK SEMANTIC MUTATION OF ALL INTERNAL DATA STRUCTURES.
 func (mgr *dsManager) eventLoop() {
 	for {
 		var e Event
@@ -152,6 +149,7 @@ func (mgr *dsManager) eventLoop() {
 
 		// Skip sync if the above changes implies no semantic change such as deleting
 		// a backend that was previously in state Unavailable.
+		// --> To complicated
 		if !semanticMutation {
 			continue
 		}

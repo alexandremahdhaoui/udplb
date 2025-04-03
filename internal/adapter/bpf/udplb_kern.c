@@ -37,6 +37,12 @@
  *   or BPF_MAP_TYPE_DEVMAP_HASH map.
  **************************************************************************/
 
+/*******************************************************************************
+ * config_t
+ *
+ *
+ ******************************************************************************/
+
 struct config_t {
     // The loadbalancer's IP is checked to decide if a packet must be
     // loadbalanced. The config.ip endianness must be in the host's.
@@ -44,6 +50,8 @@ struct config_t {
     // The loadbalancer's port is checked to decide if a packet must be
     // loadbalanced.
     __u16 port;
+    // The size of the lookup table.
+    __u32 lookup_table_size;
 };
 
 // The config is a const. If users wants to update the loadbalancer's config
@@ -51,32 +59,82 @@ struct config_t {
 // new config.
 volatile const struct config_t config;
 
-// Number of backends defined in the "backends" bpf map.
-//
-// To add, remove or disable a backend in the "backends" bpf map the
-// "n_backends" variable along the map must be locked.
-volatile __u32 n_backends;
+/*******************************************************************************
+ * active_pointer
+ *
+ *
+ ******************************************************************************/
+
+// This is a variable that can be equal to 0 or 1.
+//  - When equal to 0, the `*_a` maps and `*_a_len` variables are active, and
+//    the bpf program will read from these variants.
+//  - When equal to 1, the `*_b` maps and
+volatile __u8 active_pointer;
+
+/*******************************************************************************
+ * backends
+ *
+ * This section defines:
+ * - backend_spec
+ * - a/b backend maps.
+ * - {a,b}_len variables.
+ ******************************************************************************/
 
 struct backend_spec {
     __u32 ip;
     __u16 port;
     unsigned char mac[ETH_ALEN];
-    _Bool enabled;
+    __u8 enabled;
 };
 
-// The set of all the loadbalancer backends.
-//
-// To add, remove or disable a backend in the "backends" bpf map the
-// "n_backends" variable along the map must be locked.
+// The set of all backends.
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 64); // Max 64 backends.
     __type(key, __u32);
     __type(value, struct backend_spec);
-} backends SEC(".maps");
+} backends_a SEC(".maps");
 
-// computes the hash of x of size y and return its z modulo
-#define hash_modulo(x, y, z) fast_hash((const char *)x, sizeof(y)) % z
+// The set of all backends.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 64); // Max 64 backends.
+    __type(key, __u32);
+    __type(value, struct backend_spec);
+} backends_b SEC(".maps");
+
+volatile __u32 backends_a_len;
+volatile __u32 backends_b_len;
+
+/*******************************************************************************
+ * lookup_table
+ *
+ * This section defines:
+ * - lookup_table_{a,b} maps.
+ * - lookup_table_{a,b}_len variables.
+ ******************************************************************************/
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, ((1 << 16) - 1));
+    __type(key, __u32);
+    __type(value, __u32);
+} lookup_table_a SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, ((1 << 16) - 1));
+    __type(key, __u32);
+    __type(value, __u32);
+} lookup_table_b SEC(".maps");
+
+volatile __u32 lookup_table_a_len;
+volatile __u32 lookup_table_b_len;
+
+/*******************************************************************************
+ * udplb
+ *
+ ******************************************************************************/
 
 // TODO: add support for ipv6
 SEC("xdp")
@@ -97,10 +155,12 @@ int udplb(struct xdp_md *ctx) {
     // -- Loadbalancing packet
     // -------------------------------
     // compute modulo
-    __u32 key = hash_modulo(iph, struct iphdr, n_backends);
+    __u32 key = hash_modulo(iph, struct iphdr, config.lookup_table_size);
+
+    // TODO: make use of A and B lookup_table/backends.
 
     // get backend spec
-    struct backend_spec *backend = bpf_map_lookup_elem(&backends, &key);
+    struct backend_spec *backend = bpf_map_lookup_elem(&backends_a, &key);
     if (!backend || !backend->enabled) {
         bpf_printk("[ERROR] cannot load balance packet: no backend available");
         return XDP_PASS;
