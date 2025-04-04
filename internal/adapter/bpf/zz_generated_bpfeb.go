@@ -80,6 +80,8 @@ type udplbMapSpecs struct {
 	BackendsB    *ebpf.MapSpec `ebpf:"backends_b"`
 	LookupTableA *ebpf.MapSpec `ebpf:"lookup_table_a"`
 	LookupTableB *ebpf.MapSpec `ebpf:"lookup_table_b"`
+	SessionsA    *ebpf.MapSpec `ebpf:"sessions_a"`
+	SessionsB    *ebpf.MapSpec `ebpf:"sessions_b"`
 }
 
 // udplbVariableSpecs contains global variables before they are loaded into the kernel.
@@ -92,6 +94,8 @@ type udplbVariableSpecs struct {
 	Config           *ebpf.VariableSpec `ebpf:"config"`
 	LookupTableA_len *ebpf.VariableSpec `ebpf:"lookup_table_a_len"`
 	LookupTableB_len *ebpf.VariableSpec `ebpf:"lookup_table_b_len"`
+	SessionsA_len    *ebpf.VariableSpec `ebpf:"sessions_a_len"`
+	SessionsB_len    *ebpf.VariableSpec `ebpf:"sessions_b_len"`
 }
 
 // udplbObjects contains all objects after they have been loaded into the kernel.
@@ -118,6 +122,8 @@ type udplbMaps struct {
 	BackendsB    *ebpf.Map `ebpf:"backends_b"`
 	LookupTableA *ebpf.Map `ebpf:"lookup_table_a"`
 	LookupTableB *ebpf.Map `ebpf:"lookup_table_b"`
+	SessionsA    *ebpf.Map `ebpf:"sessions_a"`
+	SessionsB    *ebpf.Map `ebpf:"sessions_b"`
 }
 
 func (m *udplbMaps) Close() error {
@@ -126,6 +132,8 @@ func (m *udplbMaps) Close() error {
 		m.BackendsB,
 		m.LookupTableA,
 		m.LookupTableB,
+		m.SessionsA,
+		m.SessionsB,
 	)
 }
 
@@ -139,6 +147,8 @@ type udplbVariables struct {
 	Config           *ebpf.Variable `ebpf:"config"`
 	LookupTableA_len *ebpf.Variable `ebpf:"lookup_table_a_len"`
 	LookupTableB_len *ebpf.Variable `ebpf:"lookup_table_b_len"`
+	SessionsA_len    *ebpf.Variable `ebpf:"sessions_a_len"`
+	SessionsB_len    *ebpf.Variable `ebpf:"sessions_b_len"`
 }
 
 // udplbPrograms contains all programs after they have been loaded into the kernel.

@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	deferableSwitchoverMaxTries = 10
+	deferableSwitchoverMaxTries = 3
 	deferableSwitchoverTimeout  = 5 * time.Millisecond
 )
 

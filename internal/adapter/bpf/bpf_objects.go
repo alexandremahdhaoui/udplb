@@ -15,14 +15,46 @@
  */
 package bpfadapter
 
+import "github.com/google/uuid"
+
 // -------------------------------------------------------------------
 // -- OBJECTS
 // -------------------------------------------------------------------
 
 // Wraps the following ebpf objects with a convenient interface for testing.
 type Objects struct {
-	Backends    BPFMap[uint32, *udplbBackendSpec]
+	// Backends is a BPFArray of available udplbBackendSpec ordered by id of size n'.
+	// NB:
+	// - n is defined as the number of available backends.
+	// - n' is defined as the number of backends, e.g. in StateAvailable, StateUnschedulable...
+	Backends BPFArray[*udplbBackendSpec]
+
+	// LookupTable is a BPFArray of uint32 and of size m.
+	// The integers stored in this list represents the index of an available backend in the
+	// backends slice.
+	//
+	// The BPF program will:
+	// - Check if session id is mapped (see "sessions"). If not, then continue.
+	// - Compute a hash of a packet's session id modulo the lookup table's size.
+	// - With that computed key get the associated value in the lookup table.
+	// - The above operation returned the index of an available backend in the
+	//   backends array.
+	// - Use that index to get the spec of the associated backend in the backends array.
 	LookupTable BPFArray[uint32]
+
+	// Sessions maps a session id to a specific backend, if the backend transitions from
+	// StateAvailable to StateUnschedulable, existing packet destinated to an existing session
+	// will continue to hit this backend.
+	//
+	// We can use a BPF_MAP_TYPE_HASH to store the __u128 uuid.
+	// Provisioning a large BPF_MAP_TYPE_LRU_HASH could be interesting in order to avoid
+	// manually clean up old session ids from the map at a cost.
+	//
+	// The BPF program will:
+	// - Check if session id is in the sessions map. If it does, then continue.
+	// - The above operation returned the index of a backend in the backends array.
+	// - Use that index to get the spec of the associated backend in the backends array.
+	Sessions BPFMap[uuid.UUID, uint32]
 }
 
 func NewObjects(prog UDPLB) (Objects, error) {
@@ -32,27 +64,40 @@ func NewObjects(prog UDPLB) (Objects, error) {
 	}
 	objs := concrete.objs
 
-	backends, err := NewBPFMap[uint32, *udplbBackendSpec](
-		objs.BackendsA, objs.BackendsB,
-		objs.BackendsA_len, objs.BackendsB_len,
+	backends, err := NewBPFArray[*udplbBackendSpec](
+		objs.BackendsA,
+		objs.BackendsB,
+		objs.BackendsA_len,
+		objs.BackendsB_len,
 		objs.ActivePointer,
 	)
 	if err != nil {
 		return Objects{}, err
 	}
 
-	lup, err := NewBPFArray[uint32](
-		objs.LookupTableA, objs.LookupTableB,
-		objs.LookupTableA_len, objs.LookupTableB_len,
+	lookupTable, err := NewBPFArray[uint32](
+		objs.LookupTableA,
+		objs.LookupTableB,
+		objs.LookupTableA_len,
+		objs.LookupTableB_len,
 		objs.ActivePointer,
 	)
 	if err != nil {
 		return Objects{}, err
 	}
+
+	sessions, err := NewBPFMap[uuid.UUID, uint32](
+		objs.SessionsA,
+		objs.SessionsB,
+		objs.SessionsA_len,
+		objs.SessionsB_len,
+		objs.ActivePointer,
+	)
 
 	return Objects{
 		Backends:    backends,
-		LookupTable: lup,
+		LookupTable: lookupTable,
+		Sessions:    sessions,
 	}, nil
 }
 
@@ -70,6 +115,7 @@ func NewFakeObjects() Objects {
 	return Objects{
 		Backends:    NewFakeBackends(),
 		LookupTable: NewFakeLookupTable(),
+		Sessions:    NewFakeSessions,
 	}
 }
 
@@ -77,7 +123,7 @@ func NewFakeObjects() Objects {
 // -- FAKE BPF ARRAY
 // -------------------------------------------------------------------
 
-type 
+// TODO: either create the fake bpf array or just use mocks.
 
 // -------------------------------------------------------------------
 // -- FAKE BPF MAP

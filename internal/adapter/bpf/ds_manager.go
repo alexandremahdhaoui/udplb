@@ -17,16 +17,17 @@ package bpfadapter
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
+	"github.com/alexandremahdhaoui/udplb/internal/util"
 )
 
-type Event struct {
-	// TODO
-}
+// -------------------------------------------------------------------
+// -- DATA STRUCTURE MANAGER
+// -------------------------------------------------------------------
 
 type DataStructureManager interface {
 	types.DoneCloser
@@ -38,12 +39,9 @@ type DataStructureManager interface {
 	GetEventChannel() chan<- Event
 }
 
-// -------------------------------------------------------------------
-// -- NEW
-// -------------------------------------------------------------------
-
-func NewDataStructureManager(objs Objects) DataStructureManager {
+func NewDataStructureManager(name string, objs Objects) DataStructureManager {
 	mgr := &dsManager{
+		name:              name,
 		objs:              objs,
 		started:           false,
 		doneCh:            make(chan struct{}),
@@ -62,6 +60,7 @@ func NewDataStructureManager(objs Objects) DataStructureManager {
 // -------------------------------------------------------------------
 
 type dsManager struct {
+	name string
 	objs Objects
 
 	started     bool
@@ -69,8 +68,7 @@ type dsManager struct {
 	eventCh     chan Event
 	terminateCh chan struct{}
 
-	eventLoopOnceFunc         func()
-	eventLoopDebounceDuration time.Duration
+	eventLoopOnceFunc func()
 }
 
 var (
@@ -117,7 +115,9 @@ func (mgr *dsManager) Start() error {
 // -- eventLoop
 // -------------------------------------------------------------------
 
-// This loop ensures that only one goroutine is updating the internal and bpf data
+var ErrUnknownEventKind = errors.New("unknown event kind")
+
+// This loop ensures that only one goroutine is updating the internal bpf data
 // structures at a time. This synchronization pattern avoids using mutexes. Hence,
 // we do not lock these datastructures, and changes are propagated as quickly as
 // possible.
@@ -131,31 +131,99 @@ func (mgr *dsManager) eventLoop() {
 		select {
 		// receive an event.
 		case e = <-mgr.eventCh:
-		// break the event loop for graceful shutdown.
+		// break the event loop if graceful shutdown signal is received.
 		case _ = <-mgr.terminateCh:
 			close(mgr.doneCh)
 			break
+		// also break the loop if the manager is set as "done" for any reason.
 		case _ = <-mgr.doneCh:
 			break
 		}
 
-		semanticMutation := false
 		// perform event
-		switch e.Type {
-		case eventTypeDelete:
-		case eventTypePut:
-		case eventTypeReset:
+		var err error
+		switch e.Kind {
+		default:
+			err = ErrUnknownEventKind
+			e.Kind = EventKindUnknown
+		case EventKindSetObjects:
+			if err = validateObjects(e.SetObjects); err != nil {
+				break
+			}
+			err = retry(func() error { return mgr.setObjects(e.SetObjects) })
 		}
 
-		// Skip sync if the above changes implies no semantic change such as deleting
-		// a backend that was previously in state Unavailable.
-		// --> To complicated
-		if !semanticMutation {
-			continue
+		if err != nil {
+			slog.Error(
+				"an error occured while processing an event",
+				"eventManagerKind", "bpf.DataStructureManager",
+				"eventManagerName", mgr.name,
+				"eventKind", e.Kind,
+				"err", err.Error(),
+			)
 		}
-
-		// sync datastructures
-		// use flags to figure out which data structures needs to be synced?
-		mgr.sync()
 	}
+}
+
+// -------------------------------------------------------------------
+// -- setObjects
+// -------------------------------------------------------------------
+
+var (
+	ErrEventObjectMustNotBeNil      = errors.New("event object must not be nil")
+	ErrInvalidEventObjects          = errors.New("invalid struct EventObjects")
+	ErrInvalidEventOfTypeSetObjects = errors.New("invalid event of type SetObjects")
+)
+
+func validateObjects(objs EventObjects) error {
+	if util.AnyPtrIsNil(objs.Backends, objs.LookupTable, objs.Sessions) {
+		return flaterrors.Join(
+			ErrEventObjectMustNotBeNil,
+			ErrInvalidEventObjects,
+			ErrInvalidEventOfTypeSetObjects,
+		)
+	}
+
+	return nil
+}
+
+func (mgr *dsManager) setObjects(objs EventObjects) error {
+	backendsSwitchover, err := mgr.objs.Backends.SetAndDeferSwitchover(objs.Backends)
+	if err != nil {
+		return err
+	}
+
+	lupSwitchover, err := mgr.objs.LookupTable.SetAndDeferSwitchover(objs.LookupTable)
+	if err != nil {
+		return err
+	}
+
+	sessionsSwitchover, err := mgr.objs.Sessions.SetAndDeferSwitchover(objs.Sessions)
+	if err != nil {
+		return err
+	}
+
+	backendsSwitchover()
+	lupSwitchover()
+	sessionsSwitchover()
+
+	return nil
+}
+
+// -------------------------------------------------------------------
+// -- HELPERS
+// -------------------------------------------------------------------
+
+const maxRetries = 3
+
+var ErrExceededMaxRetries = errors.New("exceeded maximum retries")
+
+func retry(f func() error) error {
+	var errs error
+	for range maxRetries {
+		if err := f(); err != nil {
+			errs = flaterrors.Join(err, errs)
+		}
+	}
+	return flaterrors.Join(ErrExceededMaxRetries, errs)
 }

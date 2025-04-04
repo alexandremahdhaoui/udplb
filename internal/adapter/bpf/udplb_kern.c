@@ -75,12 +75,15 @@ volatile __u8 active_pointer;
  * backends
  *
  * This section defines:
- * - backend_spec
- * - a/b backend maps.
- * - {a,b}_len variables.
+ * - struct backend_spec
+ * - backends_{a,b} maps.
+ * - backends_{a,b}_len variables.
  ******************************************************************************/
 
+#define BACKEND_INDEX __u32
+
 struct backend_spec {
+    // __u128 id;
     __u32 ip;
     __u16 port;
     unsigned char mac[ETH_ALEN];
@@ -90,16 +93,16 @@ struct backend_spec {
 // The set of all backends.
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 64); // Max 64 backends.
-    __type(key, __u32);
+    __uint(max_entries, 64); // Max 64 backends (can be changed).
+    __type(key, BACKEND_INDEX);
     __type(value, struct backend_spec);
 } backends_a SEC(".maps");
 
 // The set of all backends.
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 64); // Max 64 backends.
-    __type(key, __u32);
+    __uint(max_entries, 64); // Max 64 backends (can be changed).
+    __type(key, BACKEND_INDEX);
     __type(value, struct backend_spec);
 } backends_b SEC(".maps");
 
@@ -114,22 +117,53 @@ volatile __u32 backends_b_len;
  * - lookup_table_{a,b}_len variables.
  ******************************************************************************/
 
+#define LOOKUP_TABLE_MAX_LENGTH 1 << 16
+#define LOOKUP_TABLE_INDEX __u32
+
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, ((1 << 16) - 1));
-    __type(key, __u32);
-    __type(value, __u32);
+    __uint(max_entries, LOOKUP_TABLE_MAX_LENGTH);
+    __type(key, LOOKUP_TABLE_INDEX);
+    __type(value, BACKEND_INDEX);
 } lookup_table_a SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, ((1 << 16) - 1));
-    __type(key, __u32);
-    __type(value, __u32);
+    __uint(max_entries, LOOKUP_TABLE_MAX_LENGTH);
+    __type(key, LOOKUP_TABLE_INDEX);
+    __type(value, BACKEND_INDEX);
 } lookup_table_b SEC(".maps");
 
 volatile __u32 lookup_table_a_len;
 volatile __u32 lookup_table_b_len;
+
+/*******************************************************************************
+ * sessions
+ *
+ * This section defines:
+ * - sessions_{a,b} maps.
+ * - sessions_{a,b}_len variables.
+ ******************************************************************************/
+
+#define SESSIONS_MAX_LENGTH 1 << 16 // 65,536
+#define SESSION_ID_TYPE __u128
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, SESSIONS_MAX_LENGTH);
+    __type(key, SESSION_ID_TYPE);
+    __type(value, BACKEND_INDEX);
+} sessions_a SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, SESSIONS_MAX_LENGTH);
+    __type(key, SESSION_ID_TYPE);
+    __type(value, BACKEND_INDEX);
+} sessions_b SEC(".maps");
+
+volatile __u32 sessions_a_len;
+volatile __u32 sessions_b_len;
 
 /*******************************************************************************
  * udplb
@@ -137,8 +171,7 @@ volatile __u32 lookup_table_b_len;
  ******************************************************************************/
 
 // TODO: add support for ipv6
-SEC("xdp")
-int udplb(struct xdp_md *ctx) {
+SEC("xdp") int udplb(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 
