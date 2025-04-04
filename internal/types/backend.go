@@ -42,8 +42,9 @@ func NewBackend(
 
 type (
 	BackendSpec struct {
-		IP   net.IP
-		Port int
+		IP      net.IP
+		Port    int
+		MacAddr net.HardwareAddr
 
 		// The desired state of the backend.
 		State State

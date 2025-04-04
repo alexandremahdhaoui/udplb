@@ -17,12 +17,31 @@ package bpfadapter
 
 import (
 	"errors"
-	"log/slog"
 	"sync"
 
-	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
+
+	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
+	"github.com/google/uuid"
+)
+
+var (
+	ErrClosingDSManager = errors.New("closing bpf.DataStructureManager")
+
+	ErrCannotTerminateDSManagerIfNotStarted = errors.New(
+		"bpf.DataStructureManager must be started once before termination",
+	)
+
+	ErrObjectsMustNotBeNil     = errors.New("object must not be nil")
+	ErrInvalidArguments        = errors.New("invalid arguments")
+	ErrSettingObjectsDSManager = errors.New("setting objects with dsManager")
+
+	ErrUnknownEventKind    = errors.New("unknown event kind")
+	ErrInvalidEventObjects = errors.New("invalid struct EventObjects")
+
+	ErrOperationAborted        = errors.New("operation aborted")
+	ErrDSManagerIsShuttingDown = errors.New("dsManager is shutting down")
 )
 
 // -------------------------------------------------------------------
@@ -35,8 +54,12 @@ type DataStructureManager interface {
 	// Initialize and starts the DataStructureManager.
 	Start() error
 
-	// GetEventChannel returns a sender channel to manage bpf data structures.
-	GetEventChannel() chan<- Event
+	// Set it thread-safe.
+	Set(
+		backends []types.Backend,
+		lookupTable []uint32,
+		sessions map[uuid.UUID]uint32,
+	) error
 }
 
 func NewDataStructureManager(name string, objs Objects) DataStructureManager {
@@ -45,7 +68,7 @@ func NewDataStructureManager(name string, objs Objects) DataStructureManager {
 		objs:              objs,
 		started:           false,
 		doneCh:            make(chan struct{}),
-		eventCh:           make(chan Event),
+		eventCh:           make(chan event),
 		terminateCh:       make(chan struct{}),
 		eventLoopOnceFunc: nil,
 	}
@@ -65,19 +88,15 @@ type dsManager struct {
 
 	started     bool
 	doneCh      chan struct{}
-	eventCh     chan Event
+	eventCh     chan event
 	terminateCh chan struct{}
 
 	eventLoopOnceFunc func()
 }
 
-var (
-	ErrCannotTerminateDSManagerIfNotStarted = errors.New(
-		"bpf.DataStructureManager must be started once before termination",
-	)
-
-	ErrClosingDSManager = errors.New("closing bpf.DataStructureManager")
-)
+// -------------------------------------------------------------------
+// -- DoneCloser
+// -------------------------------------------------------------------
 
 // Close implements DataStructureManager.
 func (mgr *dsManager) Close() error {
@@ -100,10 +119,66 @@ func (mgr *dsManager) Done() <-chan struct{} {
 	return mgr.doneCh
 }
 
-// GetEventChannel implements DataStructureManager.
-func (mgr *dsManager) GetEventChannel() chan<- Event {
-	return mgr.eventCh
+// -------------------------------------------------------------------
+// -- Set
+// -------------------------------------------------------------------
+
+func (mgr *dsManager) Set(
+	backends []types.Backend,
+	lookupTable []uint32,
+	sessions map[uuid.UUID]uint32,
+) error {
+	if util.AnyPtrIsNil(backends, lookupTable, sessions) {
+		return flaterrors.Join(
+			ErrObjectsMustNotBeNil,
+			ErrInvalidArguments,
+			ErrSettingObjectsDSManager,
+		)
+	}
+
+	e := newEvent(eventKindSet, eventObjects{
+		Backends:    TransformBackends(backends),
+		LookupTable: lookupTable,
+		Sessions:    sessions,
+	})
+
+	// send event.
+	mgr.eventCh <- e
+
+	// await the operation is done or the manager is terminated.
+	select {
+	case err := <-e.errCh:
+		if err != nil {
+			return flaterrors.Join(err, ErrSettingObjectsDSManager)
+		}
+	case <-mgr.doneCh:
+		return flaterrors.Join(
+			ErrOperationAborted,
+			ErrDSManagerIsShuttingDown,
+			ErrSettingObjectsDSManager,
+		)
+	}
+
+	return nil
 }
+
+func TransformBackends(in []types.Backend) (out []*udplbBackendSpec) {
+	out = make([]*udplbBackendSpec, len(in))
+
+	for i, b := range in {
+		out[i] = &udplbBackendSpec{
+			Ip:   util.NetIPv4ToUint32(b.Spec.IP),
+			Port: uint16(b.Spec.Port),
+			Mac:  [6]uint8(b.Spec.MacAddr),
+		}
+	}
+
+	return
+}
+
+// -------------------------------------------------------------------
+// -- Start
+// -------------------------------------------------------------------
 
 // Start implements DataStructureManager.
 func (mgr *dsManager) Start() error {
@@ -115,8 +190,6 @@ func (mgr *dsManager) Start() error {
 // -- eventLoop
 // -------------------------------------------------------------------
 
-var ErrUnknownEventKind = errors.New("unknown event kind")
-
 // This loop ensures that only one goroutine is updating the internal bpf data
 // structures at a time. This synchronization pattern avoids using mutexes. Hence,
 // we do not lock these datastructures, and changes are propagated as quickly as
@@ -126,7 +199,7 @@ var ErrUnknownEventKind = errors.New("unknown event kind")
 // shut down and you want to start it again, then you must initialize another struct.
 func (mgr *dsManager) eventLoop() {
 	for {
-		var e Event
+		var e event
 
 		select {
 		// receive an event.
@@ -142,26 +215,19 @@ func (mgr *dsManager) eventLoop() {
 
 		// perform event
 		var err error
-		switch e.Kind {
+		switch e.kind {
 		default:
 			err = ErrUnknownEventKind
-			e.Kind = EventKindUnknown
-		case EventKindSetObjects:
-			if err = validateObjects(e.SetObjects); err != nil {
-				break
-			}
-			err = retry(func() error { return mgr.setObjects(e.SetObjects) })
+			e.kind = eventKindUnknown
+		case eventKindSet:
+			err = mgr.setObjects(e.set)
 		}
 
 		if err != nil {
-			slog.Error(
-				"an error occured while processing an event",
-				"eventManagerKind", "bpf.DataStructureManager",
-				"eventManagerName", mgr.name,
-				"eventKind", e.Kind,
-				"err", err.Error(),
-			)
+			e.errCh <- err
 		}
+
+		close(e.errCh)
 	}
 }
 
@@ -169,25 +235,7 @@ func (mgr *dsManager) eventLoop() {
 // -- setObjects
 // -------------------------------------------------------------------
 
-var (
-	ErrEventObjectMustNotBeNil      = errors.New("event object must not be nil")
-	ErrInvalidEventObjects          = errors.New("invalid struct EventObjects")
-	ErrInvalidEventOfTypeSetObjects = errors.New("invalid event of type SetObjects")
-)
-
-func validateObjects(objs EventObjects) error {
-	if util.AnyPtrIsNil(objs.Backends, objs.LookupTable, objs.Sessions) {
-		return flaterrors.Join(
-			ErrEventObjectMustNotBeNil,
-			ErrInvalidEventObjects,
-			ErrInvalidEventOfTypeSetObjects,
-		)
-	}
-
-	return nil
-}
-
-func (mgr *dsManager) setObjects(objs EventObjects) error {
+func (mgr *dsManager) setObjects(objs eventObjects) error {
 	backendsSwitchover, err := mgr.objs.Backends.SetAndDeferSwitchover(objs.Backends)
 	if err != nil {
 		return err
@@ -226,4 +274,44 @@ func retry(f func() error) error {
 		}
 	}
 	return flaterrors.Join(ErrExceededMaxRetries, errs)
+}
+
+// -------------------------------------------------------------------
+// -- EVENT
+// -------------------------------------------------------------------
+
+func newEvent(kind eventKind, obj eventObjects) event {
+	e := event{
+		kind:  kind,
+		errCh: make(chan error),
+	}
+
+	switch kind {
+	default:
+		panic("unknown event")
+	case eventKindSet:
+		e.set = obj
+	}
+
+	return e
+}
+
+type event struct {
+	kind  eventKind
+	set   eventObjects
+	errCh chan error
+}
+
+type eventKind string
+
+const (
+	eventKindUnknown eventKind = "UNKNOWN"
+	eventKindSet     eventKind = "Set"
+)
+
+// All objects must be set.
+type eventObjects struct {
+	Backends    []*udplbBackendSpec
+	LookupTable []uint32
+	Sessions    map[uuid.UUID]uint32
 }

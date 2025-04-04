@@ -13,7 +13,7 @@ GO_BUILD_LDFLAGS ?= -X main.BuildTimestamp=$(TIMESTAMP) -X main.CommitSHA=$(COMM
 
 CONTROLLER_GEN_VERSION := v0.14.0
 GOFUMPT_VERSION        := v0.6.0
-GOLANGCI_LINT_VERSION  := v1.59.1
+GOLANGCI_LINT_VERSION  := v2.0.2
 GOTESTSUM_VERSION      := v1.12.0
 MOCKERY_VERSION        := v2.42.0
 OAPI_CODEGEN_VERSION   := v2.3.0
@@ -31,7 +31,7 @@ CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTR
 KINDENV        := KIND_BINARY="$(KIND_BINARY)" $(TOOLING)/kindenv@$(TOOLING_VERSION)
 GO_GEN         := go generate
 GOFUMPT        := go run mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
-GOLANGCI_LINT  := go run github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+GOLANGCI_LINT  := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 GOTESTSUM      := go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --format pkgname
 MOCKERY        := go run github.com/vektra/mockery/v2@$(MOCKERY_VERSION)
 OAPI_CODEGEN   := go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)

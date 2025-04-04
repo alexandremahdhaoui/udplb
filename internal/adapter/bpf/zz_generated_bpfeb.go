@@ -13,11 +13,9 @@ import (
 )
 
 type udplbBackendSpec struct {
-	Ip      uint32
-	Port    uint16
-	Mac     [6]uint8
-	Enabled uint8
-	_       [3]byte
+	Ip   uint32
+	Port uint16
+	Mac  [6]uint8
 }
 
 type udplbConfigT struct {

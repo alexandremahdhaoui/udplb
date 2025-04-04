@@ -87,7 +87,6 @@ struct backend_spec {
     __u32 ip;
     __u16 port;
     unsigned char mac[ETH_ALEN];
-    __u8 enabled;
 };
 
 // The set of all backends.
@@ -194,7 +193,7 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
 
     // get backend spec
     struct backend_spec *backend = bpf_map_lookup_elem(&backends_a, &key);
-    if (!backend || !backend->enabled) {
+    if (!backend) {
         bpf_printk("[ERROR] cannot load balance packet: no backend available");
         return XDP_PASS;
     }

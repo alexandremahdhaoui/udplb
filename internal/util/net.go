@@ -28,13 +28,17 @@ import (
 // -------------------------------------------------------------------
 
 // TODO: add support for ipv6
-func ParseIPToUint32(s string) (uint32, error) {
+func ParseIPV4ToUint32(s string) (uint32, error) {
 	ipv4 := net.ParseIP(s).To4()
 	if ipv4 == nil {
 		return 0, errors.New("IP must be ipv4")
 	}
 
 	return binary.NativeEndian.Uint32(ipv4), nil
+}
+
+func NetIPv4ToUint32(ip net.IP) uint32 {
+	return binary.NativeEndian.Uint32(ip.To4())
 }
 
 var errParseIEEE802MAC = errors.New(
