@@ -12,10 +12,12 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type udplbBackendSpec struct {
+type udplbBackendSpecT struct {
+	Id   [16]byte /* uint128 */
 	Ip   uint32
 	Port uint16
 	Mac  [6]uint8
+	_    [4]byte
 }
 
 type udplbConfigT struct {
@@ -23,6 +25,11 @@ type udplbConfigT struct {
 	Port            uint16
 	_               [2]byte
 	LookupTableSize uint32
+}
+
+type udplbSessionAssignmentT struct {
+	SessionId [16]byte /* uint128 */
+	BackendId [16]byte /* uint128 */
 }
 
 // loadUdplb returns the embedded CollectionSpec for udplb.
@@ -80,6 +87,7 @@ type udplbMapSpecs struct {
 	LookupTableB *ebpf.MapSpec `ebpf:"lookup_table_b"`
 	SessionsA    *ebpf.MapSpec `ebpf:"sessions_a"`
 	SessionsB    *ebpf.MapSpec `ebpf:"sessions_b"`
+	SessionsFifo *ebpf.MapSpec `ebpf:"sessions_fifo"`
 }
 
 // udplbVariableSpecs contains global variables before they are loaded into the kernel.
@@ -122,6 +130,7 @@ type udplbMaps struct {
 	LookupTableB *ebpf.Map `ebpf:"lookup_table_b"`
 	SessionsA    *ebpf.Map `ebpf:"sessions_a"`
 	SessionsB    *ebpf.Map `ebpf:"sessions_b"`
+	SessionsFifo *ebpf.Map `ebpf:"sessions_fifo"`
 }
 
 func (m *udplbMaps) Close() error {
@@ -132,6 +141,7 @@ func (m *udplbMaps) Close() error {
 		m.LookupTableB,
 		m.SessionsA,
 		m.SessionsB,
+		m.SessionsFifo,
 	)
 }
 

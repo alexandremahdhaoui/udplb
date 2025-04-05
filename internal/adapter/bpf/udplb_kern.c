@@ -23,7 +23,6 @@
 #include <bpf/bpf_helpers.h>
 #include <linux/byteorder/little_endian.h>
 #include <linux/if_ether.h>
-#include <sys/cdefs.h>
 
 #include "udplb_kern_helpers.c"
 
@@ -76,26 +75,27 @@ volatile __u8 active_pointer;
  * backends
  *
  * This section defines:
- * - struct backend_spec
+ * - backend_spec_t type.
  * - backends_{a,b} maps.
  * - backends_{a,b}_len variables.
  ******************************************************************************/
 
 #define BACKEND_INDEX __u32
+#define BACKEND_ID_TYPE __u128
 
-struct backend_spec {
-    // __u128 id;
+typedef struct {
+    BACKEND_ID_TYPE id;
     __u32 ip;
     __u16 port;
     unsigned char mac[ETH_ALEN];
-};
+} backend_spec_t;
 
 // The set of all backends.
 typedef struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 64); // Max 64 backends (can be changed).
     __type(key, BACKEND_INDEX);
-    __type(value, struct backend_spec);
+    __type(value, backend_spec_t);
 } backends_t;
 
 backends_t backends_a SEC(".maps");
@@ -148,10 +148,13 @@ static __always_inline lookup_table_t *get_active_lookup_table() {
  * This section defines:
  * - sessions_{a,b} maps.
  * - sessions_{a,b}_len variables.
+ * - session_assignment_t type.
+ * - sessions_fifo queue.
  ******************************************************************************/
 
 #define SESSIONS_MAX_LENGTH 1 << 16 // 65,536
 #define SESSION_ID_TYPE __u128
+#define SESSIONS_FIFO_MAX_LENGTH 1 << 8
 
 typedef struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -172,6 +175,21 @@ static __always_inline sessions_t *get_active_sessions() {
     }
     return &sessions_b;
 }
+
+// session_assignment_t assigns a session to a backend. Both entity are
+// identified by their id of type __u128 (uuidv4).
+typedef struct {
+    SESSION_ID_TYPE session_id;
+    BACKEND_ID_TYPE backend_id;
+} session_assignment_t;
+
+typedef struct {
+    __uint(type, BPF_MAP_TYPE_QUEUE);
+    __uint(max_entries, SESSIONS_FIFO_MAX_LENGTH);
+    __type(value, session_assignment_t);
+} sessions_fifo_t;
+
+sessions_fifo_t sessions_fifo SEC(".maps");
 
 /*******************************************************************************
  * udplb
@@ -204,11 +222,11 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     __u32 key = hash_modulo(iph, struct iphdr, config.lookup_table_size);
 
     // -- backend index from sessions
-    __u8 new_session = 0;
+    __u8 new_session = 0; // false
     __u32 *backend_idx = bpf_map_lookup_elem(sess, &key);
     if (!backend_idx) {
         // -- backend index from lookup table
-        new_session = 1;
+        new_session = 1; // true
         backend_idx = bpf_map_lookup_elem(lup, &key);
         if (!backend_idx) { // return if no backend idx
             bpf_printk("[ERROR] cannot load balance packet: no backend");
@@ -217,7 +235,7 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     }
 
     // -- backend spec
-    struct backend_spec *backend = bpf_map_lookup_elem(backends, backend_idx);
+    backend_spec_t *backend = bpf_map_lookup_elem(backends, backend_idx);
     if (!backend) {
         bpf_printk("[ERROR] cannot load balance packet: no backend available");
         return XDP_PASS;
@@ -225,7 +243,15 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
 
     // persist the hash_modulo to backend_idx mapping.
     if (new_session) {
-        long err = bpf_map_update_elem(sess, &key, backend_idx, BPF_ANY);
+        // TODO: get session id
+        __u128 session_id = 0;
+        session_assignment_t assignment = {
+            .backend_id = backend->id,
+            .session_id = session_id,
+        };
+
+        long err = bpf_map_push_elem(&sessions_fifo, &assignment, BPF_ANY);
+        err = bpf_map_update_elem(sess, &key, backend_idx, BPF_ANY);
         if (err < 0)
             bpf_printk("[ERROR] unable to map session");
     }

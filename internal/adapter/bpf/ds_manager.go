@@ -145,7 +145,7 @@ func (mgr *dsManager) Set(
 	// send event.
 	mgr.eventCh <- e
 
-	// await the operation is done or the manager is terminated.
+	// await until the operation is done or the manager is terminated.
 	select {
 	case err := <-e.errCh:
 		if err != nil {
@@ -162,11 +162,12 @@ func (mgr *dsManager) Set(
 	return nil
 }
 
-func TransformBackends(in []types.Backend) (out []*udplbBackendSpec) {
-	out = make([]*udplbBackendSpec, len(in))
+func TransformBackends(in []types.Backend) (out []*udplbBackendSpecT) {
+	out = make([]*udplbBackendSpecT, len(in))
 
 	for i, b := range in {
-		out[i] = &udplbBackendSpec{
+		out[i] = &udplbBackendSpecT{
+			Id:   b.Id,
 			Ip:   util.NetIPv4ToUint32(b.Spec.IP),
 			Port: uint16(b.Spec.Port),
 			Mac:  [6]uint8(b.Spec.MacAddr),
@@ -205,11 +206,11 @@ func (mgr *dsManager) eventLoop() {
 		// receive an event.
 		case e = <-mgr.eventCh:
 		// break the event loop if graceful shutdown signal is received.
-		case _ = <-mgr.terminateCh:
+		case <-mgr.terminateCh:
 			close(mgr.doneCh)
 			break
 		// also break the loop if the manager is set as "done" for any reason.
-		case _ = <-mgr.doneCh:
+		case <-mgr.doneCh:
 			break
 		}
 
@@ -311,7 +312,7 @@ const (
 
 // All objects must be set.
 type eventObjects struct {
-	Backends    []*udplbBackendSpec
+	Backends    []*udplbBackendSpecT
 	LookupTable []uint32
 	Sessions    map[uuid.UUID]uint32
 }
