@@ -68,7 +68,8 @@ volatile const config_t config;
 // This is a variable that can be equal to 0 or 1.
 //  - When equal to 0, the `*_a` maps and `*_a_len` variables are active, and
 //    the bpf program will read from these variants.
-//  - When equal to 1, the `*_b` maps and
+//  - When equal to 1, the `*_b` maps and `*_b_len` variables are active, and
+//    the bpf program will read from these variants.
 volatile __u8 active_pointer;
 
 /*******************************************************************************
