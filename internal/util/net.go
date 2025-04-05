@@ -18,6 +18,7 @@ package util
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"net"
 
 	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
@@ -67,4 +68,17 @@ func ParseIEEE802MAC(s string) ([6]uint8, error) {
 		mac[4],
 		mac[5],
 	}, nil
+}
+
+// -------------------------------------------------------------------
+// -- ValidateUint16Port
+// -------------------------------------------------------------------
+
+var ErrInvalidUDPLBPort = errors.New("udplb port is invalid")
+
+func ValidateUint16Port(port int) error {
+	if port < 1000 || port > math.MaxUint16 {
+		return ErrInvalidUDPLBPort
+	}
+	return nil
 }

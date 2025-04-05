@@ -111,6 +111,8 @@ var (
 	_ BPFVariable[any]    = &FakeBPFVariable[any]{}
 )
 
+// TODO: fix fake objects
+
 func NewFakeObjects() Objects {
 	return Objects{
 		Backends:    NewFakeBackends(),
