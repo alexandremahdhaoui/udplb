@@ -43,7 +43,7 @@
  *
  ******************************************************************************/
 
-struct config_t {
+typedef struct {
     // The loadbalancer's IP is checked to decide if a packet must be
     // loadbalanced. The config.ip endianness must be in the host's.
     __u32 ip;
@@ -52,12 +52,12 @@ struct config_t {
     __u16 port;
     // The size of the lookup table.
     __u32 lookup_table_size;
-};
+} config_t;
 
 // The config is a const. If users wants to update the loadbalancer's config
 // they must rollout a new deployment, or start a new process specifying the
 // new config.
-volatile const struct config_t config;
+volatile const config_t config;
 
 /*******************************************************************************
  * active_pointer
