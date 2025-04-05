@@ -23,6 +23,7 @@
 #include <bpf/bpf_helpers.h>
 #include <linux/byteorder/little_endian.h>
 #include <linux/if_ether.h>
+#include <sys/cdefs.h>
 
 #include "udplb_kern_helpers.c"
 
@@ -71,6 +72,14 @@ volatile const struct config_t config;
 //  - When equal to 1, the `*_b` maps and
 volatile __u8 active_pointer;
 
+#define get_active(x)                                                          \
+    ({                                                                         \
+        if (active_pointer)                                                    \
+            return &x##_a;                                                     \
+        else                                                                   \
+            return &x##_b;                                                     \
+    })
+
 /*******************************************************************************
  * backends
  *
@@ -90,23 +99,25 @@ struct backend_spec {
 };
 
 // The set of all backends.
-struct {
+typedef struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 64); // Max 64 backends (can be changed).
     __type(key, BACKEND_INDEX);
     __type(value, struct backend_spec);
-} backends_a SEC(".maps");
+} backends_t;
 
-// The set of all backends.
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 64); // Max 64 backends (can be changed).
-    __type(key, BACKEND_INDEX);
-    __type(value, struct backend_spec);
-} backends_b SEC(".maps");
+backends_t backends_a SEC(".maps");
+backends_t backends_b SEC(".maps");
 
 volatile __u32 backends_a_len;
 volatile __u32 backends_b_len;
+
+static __always_inline backends_t *get_active_backends() {
+    if (active_pointer) {
+        return &backends_a;
+    }
+    return &backends_b;
+}
 
 /*******************************************************************************
  * lookup_table
@@ -119,22 +130,25 @@ volatile __u32 backends_b_len;
 #define LOOKUP_TABLE_MAX_LENGTH 1 << 16
 #define LOOKUP_TABLE_INDEX __u32
 
-struct {
+typedef struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, LOOKUP_TABLE_MAX_LENGTH);
     __type(key, LOOKUP_TABLE_INDEX);
     __type(value, BACKEND_INDEX);
-} lookup_table_a SEC(".maps");
+} lookup_table_t;
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, LOOKUP_TABLE_MAX_LENGTH);
-    __type(key, LOOKUP_TABLE_INDEX);
-    __type(value, BACKEND_INDEX);
-} lookup_table_b SEC(".maps");
+lookup_table_t lookup_table_a SEC(".maps");
+lookup_table_t lookup_table_b SEC(".maps");
 
 volatile __u32 lookup_table_a_len;
 volatile __u32 lookup_table_b_len;
+
+static __always_inline lookup_table_t *get_active_lookup_table() {
+    if (active_pointer) {
+        return &lookup_table_a;
+    }
+    return &lookup_table_b;
+}
 
 /*******************************************************************************
  * sessions
@@ -147,22 +161,25 @@ volatile __u32 lookup_table_b_len;
 #define SESSIONS_MAX_LENGTH 1 << 16 // 65,536
 #define SESSION_ID_TYPE __u128
 
-struct {
+typedef struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, SESSIONS_MAX_LENGTH);
     __type(key, SESSION_ID_TYPE);
     __type(value, BACKEND_INDEX);
-} sessions_a SEC(".maps");
+} sessions_t;
 
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, SESSIONS_MAX_LENGTH);
-    __type(key, SESSION_ID_TYPE);
-    __type(value, BACKEND_INDEX);
-} sessions_b SEC(".maps");
+sessions_t sessions_a SEC(".maps");
+sessions_t sessions_b SEC(".maps");
 
 volatile __u32 sessions_a_len;
 volatile __u32 sessions_b_len;
+
+static __always_inline sessions_t *get_active_sessions() {
+    if (active_pointer) {
+        return &sessions_a;
+    }
+    return &sessions_b;
+}
 
 /*******************************************************************************
  * udplb
@@ -186,16 +203,39 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     // -------------------------------
     // -- Loadbalancing packet
     // -------------------------------
-    // compute modulo
+
+    backends_t *backends = get_active_backends();
+    lookup_table_t *lup = get_active_lookup_table();
+    sessions_t *sess = get_active_sessions();
+
+    // -- compute modulo
     __u32 key = hash_modulo(iph, struct iphdr, config.lookup_table_size);
 
-    // TODO: make use of A and B lookup_table/backends.
+    // -- backend index from sessions
+    __u8 new_session = 0;
+    __u32 *backend_idx = bpf_map_lookup_elem(sess, &key);
+    if (!backend_idx) {
+        // -- backend index from lookup table
+        new_session = 1;
+        backend_idx = bpf_map_lookup_elem(lup, &key);
+        if (!backend_idx) { // return if no backend idx
+            bpf_printk("[ERROR] cannot load balance packet: no backend");
+            return XDP_PASS;
+        }
+    }
 
-    // get backend spec
-    struct backend_spec *backend = bpf_map_lookup_elem(&backends_a, &key);
+    // -- backend spec
+    struct backend_spec *backend = bpf_map_lookup_elem(backends, backend_idx);
     if (!backend) {
         bpf_printk("[ERROR] cannot load balance packet: no backend available");
         return XDP_PASS;
+    }
+
+    // persist the hash_modulo to backend_idx mapping.
+    if (new_session) {
+        long err = bpf_map_update_elem(sess, &key, backend_idx, BPF_ANY);
+        if (err < 0)
+            bpf_printk("[ERROR] unable to map session");
     }
 
     // -------------------------------

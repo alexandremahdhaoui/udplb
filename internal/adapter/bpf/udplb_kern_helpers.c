@@ -27,9 +27,6 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-// computes the hash of x of size y and return its z modulo
-#define hash_modulo(x, y, z) fast_hash((const char *)x, sizeof(y)) % z
-
 // ---------------------------------------------------------------------------
 // -- PACKET HELPERS
 // ---------------------------------------------------------------------------
@@ -113,6 +110,9 @@ static __always_inline __u16 udphdr_csum(struct udphdr *udph) {
 // ---------------------------------------------------------------------------
 // -- FAST HASH
 // ---------------------------------------------------------------------------
+
+// computes the hash of x of size y and return its z modulo
+#define hash_modulo(x, y, z) fast_hash((const char *)x, sizeof(y)) % z
 
 // computes a fast hash
 // TODO: benchmark this func w/ other hash funcs.
