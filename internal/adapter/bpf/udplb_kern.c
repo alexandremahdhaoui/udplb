@@ -72,14 +72,6 @@ volatile const struct config_t config;
 //  - When equal to 1, the `*_b` maps and
 volatile __u8 active_pointer;
 
-#define get_active(x)                                                          \
-    ({                                                                         \
-        if (active_pointer)                                                    \
-            return &x##_a;                                                     \
-        else                                                                   \
-            return &x##_b;                                                     \
-    })
-
 /*******************************************************************************
  * backends
  *
