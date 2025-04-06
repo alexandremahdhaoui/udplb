@@ -34,7 +34,7 @@ const (
 // -------------------------------------------------------------------
 
 // Wraps bpf objects with a convenient interface for testing.
-type BPFArray[T any] interface {
+type Array[T any] interface {
 	// -- Set all values of the BPF map to the one of the input map.
 	//	  - DELETE all entries in the *ebpf.Map that have index > newL_en.
 	//	  - UPDATE_BATCH all entries with index in the interval [0, oldLen].
@@ -64,11 +64,11 @@ type BPFArray[T any] interface {
 	SetAndDeferSwitchover(values []T) (func(), error)
 }
 
-func NewBPFArray[T any](
+func NewArray[T any](
 	a, b *ebpf.Map,
 	aLen, bLen *ebpf.Variable,
 	activePointer *ebpf.Variable,
-) (BPFArray[T], error) {
+) (Array[T], error) {
 	if util.AnyPtrIsNil(a, b, aLen, bLen, activePointer) {
 		return nil, ErrEBPFObjectsMustNotBeNil
 	}

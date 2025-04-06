@@ -23,11 +23,11 @@ import "github.com/google/uuid"
 
 // Wraps the following ebpf objects with a convenient interface for testing.
 type Objects struct {
-	// Backends is a BPFArray of available udplbBackendSpec ordered by id of size n'.
+	// BackendList is a BPFArray of available udplbBackendSpecT ordered by id of size n'.
 	// NB:
 	// - n is defined as the number of available backends.
 	// - n' is defined as the number of backends, e.g. in StateAvailable, StateUnschedulable...
-	Backends BPFArray[*udplbBackendSpec]
+	BackendList Array[*udplbBackendSpecT]
 
 	// LookupTable is a BPFArray of uint32 and of size m.
 	// The integers stored in this list represents the index of an available backend in the
@@ -40,9 +40,12 @@ type Objects struct {
 	// - The above operation returned the index of an available backend in the
 	//   backends array.
 	// - Use that index to get the spec of the associated backend in the backends array.
-	LookupTable BPFArray[uint32]
+	LookupTable Array[uint32]
 
-	// Sessions maps a session id to a specific backend, if the backend transitions from
+	// TODO: add "AssignmentFIFO" of type bpfadapter.FIFO[udplbSessionAssignmentT].
+	Assignment FIFO[udplbAssignmentT]
+
+	// SessionMap maps a session id to a specific backend, if the backend transitions from
 	// StateAvailable to StateUnschedulable, existing packet destinated to an existing session
 	// will continue to hit this backend.
 	//
@@ -54,7 +57,7 @@ type Objects struct {
 	// - Check if session id is in the sessions map. If it does, then continue.
 	// - The above operation returned the index of a backend in the backends array.
 	// - Use that index to get the spec of the associated backend in the backends array.
-	Sessions BPFMap[uuid.UUID, uint32]
+	SessionMap Map[uuid.UUID, uint32]
 }
 
 func NewObjects(prog UDPLB) (Objects, error) {
@@ -64,18 +67,18 @@ func NewObjects(prog UDPLB) (Objects, error) {
 	}
 	objs := concrete.objs
 
-	backends, err := NewBPFArray[*udplbBackendSpec](
-		objs.BackendsA,
-		objs.BackendsB,
-		objs.BackendsA_len,
-		objs.BackendsB_len,
+	backends, err := NewArray[*udplbBackendSpecT](
+		objs.BackendListA,
+		objs.BackendListB,
+		objs.BackendListA_len,
+		objs.BackendListB_len,
 		objs.ActivePointer,
 	)
 	if err != nil {
 		return Objects{}, err
 	}
 
-	lookupTable, err := NewBPFArray[uint32](
+	lookupTable, err := NewArray[uint32](
 		objs.LookupTableA,
 		objs.LookupTableB,
 		objs.LookupTableA_len,
@@ -86,18 +89,18 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		return Objects{}, err
 	}
 
-	sessions, err := NewBPFMap[uuid.UUID, uint32](
-		objs.SessionsA,
-		objs.SessionsB,
-		objs.SessionsA_len,
-		objs.SessionsB_len,
+	sessions, err := NewMap[uuid.UUID, uint32](
+		objs.SessionMapA,
+		objs.SessionMapB,
+		objs.SessionMapA_len,
+		objs.SessionMapB_len,
 		objs.ActivePointer,
 	)
 
 	return Objects{
-		Backends:    backends,
+		BackendList: backends,
 		LookupTable: lookupTable,
-		Sessions:    sessions,
+		SessionMap:  sessions,
 	}, nil
 }
 
@@ -106,18 +109,18 @@ func NewObjects(prog UDPLB) (Objects, error) {
 // -------------------------------------------------------------------
 
 var (
-	_ BPFArray[any]       = &FakeBPFArray[any]{}
-	_ BPFMap[uint32, any] = &FakeBPFMap[uint32, any]{}
-	_ BPFVariable[any]    = &FakeBPFVariable[any]{}
+	_ Array[any]       = &FakeBPFArray[any]{}
+	_ Map[uint32, any] = &FakeBPFMap[uint32, any]{}
+	_ Variable[any]    = &FakeBPFVariable[any]{}
 )
 
 // TODO: fix fake objects
 
 func NewFakeObjects() Objects {
 	return Objects{
-		Backends:    NewFakeBackends(),
+		BackendList: NewFakeBackendList(),
 		LookupTable: NewFakeLookupTable(),
-		Sessions:    NewFakeSessions,
+		SessionMap:  NewFakeSessionMap,
 	}
 }
 
@@ -148,9 +151,9 @@ func (m *FakeBPFMap[K, V]) SetAndDeferSwitchover(kv map[K]V) (func(), error) {
 	}, nil
 }
 
-func NewFakeBackends() *FakeBPFMap[uint32, *udplbBackendSpec] {
-	return &FakeBPFMap[uint32, *udplbBackendSpec]{
-		Map: make(map[uint32]*udplbBackendSpec),
+func NewFakeBackendList() *FakeBPFMap[uint32, *udplbBackendSpecT] {
+	return &FakeBPFMap[uint32, *udplbBackendSpecT]{
+		Map: make(map[uint32]*udplbBackendSpecT),
 	}
 }
 

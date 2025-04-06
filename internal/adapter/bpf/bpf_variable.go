@@ -41,7 +41,7 @@ var (
 //   - caching & no-cache for Get().
 //   - Set with differable switchover in order to sync switchover with
 //     many bpf data structures.
-type BPFVariable[T any] interface {
+type Variable[T any] interface {
 	// Set the variable.
 	Set(v T) error
 }
@@ -55,7 +55,7 @@ func (b *bpfVariable[T]) Set(v T) error {
 	return b.obj.Set(v)
 }
 
-func NewBPFVariable[T any](obj *ebpf.Variable) (BPFVariable[T], error) {
+func NewVariable[T any](obj *ebpf.Variable) (Variable[T], error) {
 	if obj == nil {
 		return nil, flaterrors.Join(ErrEBPFObjectsMustNotBeNil, ErrNewBPFVariable)
 	}

@@ -29,7 +29,7 @@ import (
 // -------------------------------------------------------------------
 
 // Wraps bpf objects with a convenient interface for testing.
-type BPFMap[K comparable, V any] interface {
+type Map[K comparable, V any] interface {
 	// Set all values of the BPF map to the one of the input map.
 	Set(kv map[K]V) error
 
@@ -88,11 +88,11 @@ type bpfMap[K comparable, V any] struct {
 	activePointerCache uint8
 }
 
-func NewBPFMap[K comparable, V any](
+func NewMap[K comparable, V any](
 	a, b *ebpf.Map,
 	aLen, bLen *ebpf.Variable,
 	activePointer *ebpf.Variable,
-) (BPFMap[K, V], error) {
+) (Map[K, V], error) {
 	if util.AnyPtrIsNil(a, b, aLen, bLen, activePointer) {
 		return nil, ErrEBPFObjectsMustNotBeNil
 	}

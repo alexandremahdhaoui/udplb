@@ -51,10 +51,7 @@ var (
 type DataStructureManager interface {
 	types.DoneCloser
 
-	// Initialize and starts the DataStructureManager.
-	Start() error
-
-	// Set it thread-safe.
+	// Set is thread-safe.
 	Set(
 		backends []types.Backend,
 		lookupTable []uint32,
@@ -62,7 +59,7 @@ type DataStructureManager interface {
 	) error
 }
 
-func NewDataStructureManager(name string, objs Objects) DataStructureManager {
+func NewDataStructureManager(name string, objs Objects) (DataStructureManager, error) {
 	mgr := &dsManager{
 		name:              name,
 		objs:              objs,
@@ -75,7 +72,11 @@ func NewDataStructureManager(name string, objs Objects) DataStructureManager {
 
 	mgr.eventLoopOnceFunc = sync.OnceFunc(mgr.eventLoop)
 
-	return mgr
+	if err := mgr.Start(); err != nil {
+		return nil, err
+	}
+
+	return mgr, nil
 }
 
 // -------------------------------------------------------------------
@@ -237,7 +238,7 @@ func (mgr *dsManager) eventLoop() {
 // -------------------------------------------------------------------
 
 func (mgr *dsManager) setObjects(objs eventObjects) error {
-	backendsSwitchover, err := mgr.objs.Backends.SetAndDeferSwitchover(objs.Backends)
+	backendsSwitchover, err := mgr.objs.BackendList.SetAndDeferSwitchover(objs.Backends)
 	if err != nil {
 		return err
 	}
@@ -247,7 +248,7 @@ func (mgr *dsManager) setObjects(objs eventObjects) error {
 		return err
 	}
 
-	sessionsSwitchover, err := mgr.objs.Sessions.SetAndDeferSwitchover(objs.Sessions)
+	sessionsSwitchover, err := mgr.objs.SessionMap.SetAndDeferSwitchover(objs.Sessions)
 	if err != nil {
 		return err
 	}

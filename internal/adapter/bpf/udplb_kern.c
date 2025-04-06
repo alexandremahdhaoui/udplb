@@ -77,8 +77,8 @@ volatile __u8 active_pointer;
  *
  * This section defines:
  * - backend_spec_t type.
- * - backends_{a,b} maps.
- * - backends_{a,b}_len variables.
+ * - backend_list_{a,b} maps.
+ * - backend_list_{a,b}_len variables.
  ******************************************************************************/
 
 #define BACKEND_INDEX __u32
@@ -97,19 +97,19 @@ typedef struct {
     __uint(max_entries, 64); // Max 64 backends (can be changed).
     __type(key, BACKEND_INDEX);
     __type(value, backend_spec_t);
-} backends_t;
+} backend_list_t;
 
-backends_t backends_a SEC(".maps");
-backends_t backends_b SEC(".maps");
+backend_list_t backend_list_a SEC(".maps");
+backend_list_t backend_list_b SEC(".maps");
 
-volatile __u32 backends_a_len;
-volatile __u32 backends_b_len;
+volatile __u32 backend_list_a_len;
+volatile __u32 backend_list_b_len;
 
-static __always_inline backends_t *get_active_backends() {
+static __always_inline backend_list_t *get_active_backend_list() {
     if (active_pointer) {
-        return &backends_a;
+        return &backend_list_a;
     }
-    return &backends_b;
+    return &backend_list_b;
 }
 
 /*******************************************************************************
@@ -147,50 +147,57 @@ static __always_inline lookup_table_t *get_active_lookup_table() {
  * sessions
  *
  * This section defines:
- * - sessions_{a,b} maps.
- * - sessions_{a,b}_len variables.
- * - session_assignment_t type.
- * - sessions_fifo queue.
+ * - session_map_{a,b} maps.
+ * - session_map_{a,b}_len variables.
  ******************************************************************************/
 
 #define SESSIONS_MAX_LENGTH 1 << 16 // 65,536
 #define SESSION_ID_TYPE __u128
-#define SESSIONS_FIFO_MAX_LENGTH 1 << 8
 
 typedef struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, SESSIONS_MAX_LENGTH);
     __type(key, SESSION_ID_TYPE);
     __type(value, BACKEND_INDEX);
-} sessions_t;
+} session_map_t;
 
-sessions_t sessions_a SEC(".maps");
-sessions_t sessions_b SEC(".maps");
+session_map_t session_map_a SEC(".maps");
+session_map_t session_map_b SEC(".maps");
 
-volatile __u32 sessions_a_len;
-volatile __u32 sessions_b_len;
+volatile __u32 session_map_a_len;
+volatile __u32 session_map_b_len;
 
-static __always_inline sessions_t *get_active_sessions() {
+static __always_inline session_map_t *get_active_sessions() {
     if (active_pointer) {
-        return &sessions_a;
+        return &session_map_a;
     }
-    return &sessions_b;
+    return &session_map_b;
 }
+
+/*******************************************************************************
+ * assignments
+ *
+ * This section defines:
+ * - assignment_t type.
+ * - assignment_fifo queue.
+ ******************************************************************************/
+
+#define SESSIONS_FIFO_MAX_LENGTH 1 << 8
 
 // session_assignment_t assigns a session to a backend. Both entity are
 // identified by their id of type __u128 (uuidv4).
 typedef struct {
     SESSION_ID_TYPE session_id;
     BACKEND_ID_TYPE backend_id;
-} session_assignment_t;
+} assignment_t;
 
 typedef struct {
     __uint(type, BPF_MAP_TYPE_QUEUE);
     __uint(max_entries, SESSIONS_FIFO_MAX_LENGTH);
-    __type(value, session_assignment_t);
-} sessions_fifo_t;
+    __type(value, assignment_t);
+} assignment_fifo_t;
 
-sessions_fifo_t sessions_fifo SEC(".maps");
+assignment_fifo_t assignment_fifo SEC(".maps");
 
 /*******************************************************************************
  * udplb
@@ -216,12 +223,12 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     // -- Loadbalancing packet
     // -------------------------------
 
-    backends_t *backends = get_active_backends();
+    backend_list_t *backends = get_active_backend_list();
     lookup_table_t *lup = get_active_lookup_table();
-    sessions_t *sess = get_active_sessions();
+    session_map_t *sess = get_active_sessions();
 
     // -- compute key from session id
-    __u32 key = udpd->session_id % config.lookup_table_size;
+    __u32 key = hash_modulo(udpd->session_id, __u128, config.lookup_table_size);
 
     // -- get backend index from sessions
     __u32 *backend_idx = bpf_map_lookup_elem(sess, &key);
@@ -246,13 +253,13 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
 
     // persist assignment if new session
     if (new_session) {
-        session_assignment_t assignment = {
+        assignment_t assignment = {
             .backend_id = backend->id,
             .session_id = udpd->session_id,
         };
 
         // notify userland about this new assignment.
-        long err = bpf_map_push_elem(&sessions_fifo, &assignment, BPF_ANY);
+        long err = bpf_map_push_elem(&assignment_fifo, &assignment, BPF_ANY);
         if (err < 0)
             bpf_printk("[ERROR] unable to add new session to fifo");
 
