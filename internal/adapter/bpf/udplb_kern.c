@@ -179,10 +179,15 @@ static __always_inline session_map_t *get_active_sessions() {
  *
  * This section defines:
  * - assignment_t type.
- * - assignment_fifo queue.
+ * - assignment_ringbuf ring buffer.
+ *
+ * Links:
+ * - https://docs.ebpf.io/linux/map-type/BPF_MAP_TYPE_RINGBUF/
+ * - https://docs.ebpf.io/linux/helper-function/bpf_ringbuf_submit/
+ * - https://nakryiko.com/posts/bpf-ringbuf/#bpf-ringbuf-bpf-ringbuf-output
  ******************************************************************************/
 
-#define SESSIONS_FIFO_MAX_LENGTH 1 << 8
+#define ASSIGNMENT_RINGBUF_SIZE sizeof(assignment_t) * 1024 // 36KB
 
 // session_assignment_t assigns a session to a backend. Both entity are
 // identified by their id of type __u128 (uuidv4).
@@ -192,12 +197,12 @@ typedef struct {
 } assignment_t;
 
 typedef struct {
-    __uint(type, BPF_MAP_TYPE_QUEUE);
-    __uint(max_entries, SESSIONS_FIFO_MAX_LENGTH);
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, ASSIGNMENT_RINGBUF_SIZE);
     __type(value, assignment_t);
-} assignment_fifo_t;
+} assignment_ringbuf_t;
 
-assignment_fifo_t assignment_fifo SEC(".maps");
+assignment_ringbuf_t assignment_ringbuf SEC(".maps");
 
 /*******************************************************************************
  * udplb
@@ -251,19 +256,25 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
 
     // persist assignment if new session
     if (new_session) {
-        assignment_t assignment = {
-            .backend_id = backend->id,
-            .session_id = udpd->session_id,
-        };
+        assignment_t *a;
 
-        // notify userland about this new assignment.
-        long err = bpf_map_push_elem(&assignment_fifo, &assignment, BPF_ANY);
-        if (err < 0)
+        // "notify" userland about this new assignment.
+        long err = bpf_map_push_elem(&assignment_ringbuf, &a, BPF_ANY);
+        if (err < 0) // Failing is fine
             bpf_printk("[ERROR] unable to add new session to fifo");
+
+        a = bpf_ringbuf_reserve(&assignment_ringbuf, sizeof(assignment_t), 0);
+        if (a != NULL) {
+            a->backend_id = backend->id;
+            a->session_id = udpd->session_id;
+            bpf_ringbuf_submit(a, 0);
+        } else {
+            bpf_printk("[ERROR] unable to write new assignment to ring buffer");
+        }
 
         // persist "locally" (i.e. in the active bpf map)
         err = bpf_map_update_elem(sess, &key, backend_idx, BPF_ANY);
-        if (err < 0)
+        if (err < 0) // Failing is fine.
             bpf_printk("[ERROR] unable to map new session");
     }
 

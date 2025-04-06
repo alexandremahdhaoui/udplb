@@ -81,13 +81,13 @@ type udplbProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type udplbMapSpecs struct {
-	AssignmentFifo *ebpf.MapSpec `ebpf:"assignment_fifo"`
-	BackendListA   *ebpf.MapSpec `ebpf:"backend_list_a"`
-	BackendListB   *ebpf.MapSpec `ebpf:"backend_list_b"`
-	LookupTableA   *ebpf.MapSpec `ebpf:"lookup_table_a"`
-	LookupTableB   *ebpf.MapSpec `ebpf:"lookup_table_b"`
-	SessionMapA    *ebpf.MapSpec `ebpf:"session_map_a"`
-	SessionMapB    *ebpf.MapSpec `ebpf:"session_map_b"`
+	AssignmentRingbuf *ebpf.MapSpec `ebpf:"assignment_ringbuf"`
+	BackendListA      *ebpf.MapSpec `ebpf:"backend_list_a"`
+	BackendListB      *ebpf.MapSpec `ebpf:"backend_list_b"`
+	LookupTableA      *ebpf.MapSpec `ebpf:"lookup_table_a"`
+	LookupTableB      *ebpf.MapSpec `ebpf:"lookup_table_b"`
+	SessionMapA       *ebpf.MapSpec `ebpf:"session_map_a"`
+	SessionMapB       *ebpf.MapSpec `ebpf:"session_map_b"`
 }
 
 // udplbVariableSpecs contains global variables before they are loaded into the kernel.
@@ -124,18 +124,18 @@ func (o *udplbObjects) Close() error {
 //
 // It can be passed to loadUdplbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type udplbMaps struct {
-	AssignmentFifo *ebpf.Map `ebpf:"assignment_fifo"`
-	BackendListA   *ebpf.Map `ebpf:"backend_list_a"`
-	BackendListB   *ebpf.Map `ebpf:"backend_list_b"`
-	LookupTableA   *ebpf.Map `ebpf:"lookup_table_a"`
-	LookupTableB   *ebpf.Map `ebpf:"lookup_table_b"`
-	SessionMapA    *ebpf.Map `ebpf:"session_map_a"`
-	SessionMapB    *ebpf.Map `ebpf:"session_map_b"`
+	AssignmentRingbuf *ebpf.Map `ebpf:"assignment_ringbuf"`
+	BackendListA      *ebpf.Map `ebpf:"backend_list_a"`
+	BackendListB      *ebpf.Map `ebpf:"backend_list_b"`
+	LookupTableA      *ebpf.Map `ebpf:"lookup_table_a"`
+	LookupTableB      *ebpf.Map `ebpf:"lookup_table_b"`
+	SessionMapA       *ebpf.Map `ebpf:"session_map_a"`
+	SessionMapB       *ebpf.Map `ebpf:"session_map_b"`
 }
 
 func (m *udplbMaps) Close() error {
 	return _UdplbClose(
-		m.AssignmentFifo,
+		m.AssignmentRingbuf,
 		m.BackendListA,
 		m.BackendListB,
 		m.LookupTableA,
