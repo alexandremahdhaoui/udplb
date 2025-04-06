@@ -151,6 +151,7 @@ func (arr *bpfArray[T]) SetAndDeferSwitchover(values []T) (func(), error) {
 	}), nil
 }
 
+// set performs at most 2 syscalls
 func (arr *bpfArray[T]) set(values []T) error {
 	keys := make([]uint32, len(values))
 	for i := range len(values) {
@@ -159,7 +160,10 @@ func (arr *bpfArray[T]) set(values []T) error {
 
 	passiveMap := arr.getPassiveMap()
 
-	// - UPDATE_BATCH all entries with index in the interval [0, old_length].
+	// -- UPDATE_BATCH
+	// Only BPF_ANY is supported, hence UPDATE_BATCH is in fact a PUT operation.
+	// - https://github.com/torvalds/linux/blob/master/kernel/bpf/syscall.c#L1981
+	// - https://github.com/torvalds/linux/blob/master/kernel/bpf/arraymap.c#L888
 	if _, err := passiveMap.BatchUpdate(keys, values, nil); err != nil {
 		return err
 	}
@@ -167,11 +171,8 @@ func (arr *bpfArray[T]) set(values []T) error {
 	oldLen := arr.getActiveLenFromCache()
 	newLen := uint32(len(values))
 
-	switch {
-	default:
-		return nil // return early if length did not change.
-	case oldLen > newLen:
-		// - DELETE all entries in the *ebpf.Map that have index > new_length.
+	// -- DELETE all entries in the *ebpf.Map that have index > new_length.
+	if oldLen > newLen {
 		keys := make([]uint32, 0, oldLen-newLen) // TODO
 		for i := newLen; i < oldLen; i++ {
 			keys = append(keys, i)
@@ -179,13 +180,6 @@ func (arr *bpfArray[T]) set(values []T) error {
 
 		if _, err := passiveMap.BatchDelete(keys, nil); err != nil {
 			return err
-		}
-	case oldLen < newLen:
-		// - PUT all entries with index in the interval [old_length, new_length].
-		for i := oldLen; i < newLen; i++ {
-			if err := passiveMap.Put(i, values[i]); err != nil {
-				return err
-			}
 		}
 	}
 

@@ -227,10 +227,8 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     lookup_table_t *lup = get_active_lookup_table();
     session_map_t *sess = get_active_sessions();
 
-    // -- compute key from session id
+    // -- compute key from session id & get backend index from session map.
     __u32 key = hash_modulo(udpd->session_id, __u128, config.lookup_table_size);
-
-    // -- get backend index from sessions
     __u32 *backend_idx = bpf_map_lookup_elem(sess, &key);
     __u8 new_session = (backend_idx == NULL);
 

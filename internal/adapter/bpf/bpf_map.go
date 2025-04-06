@@ -141,6 +141,7 @@ func (m *bpfMap[K, V]) SetAndDeferSwitchover(newMap map[K]V) (func(), error) {
 	}), nil
 }
 
+// set performs at most 2 syscalls.
 func (m *bpfMap[K, V]) set(newMap map[K]V) error {
 	passiveMap := m.getPassiveMap()
 	activeKeys := m.getActiveKeysFromCache()
@@ -158,10 +159,9 @@ func (m *bpfMap[K, V]) set(newMap map[K]V) error {
 		oldKeys[k] = struct{}{}
 	}
 
-	deleteKeys := make([]K, 0)    // - -> n calls
-	putBucket := make(map[K]V, 0) // + -> n calls
-	updateKeys := make([]K, 0)    // = -> 1 call
-	updateValues := make([]V, 0)
+	keys := make([]K, 0)
+	values := make([]V, 0)
+	toDelete := make([]K, 0)
 
 	// for each key-value pairs in the new map:
 	// - we set the encountered key in the set of new keys.
@@ -172,38 +172,31 @@ func (m *bpfMap[K, V]) set(newMap map[K]V) error {
 	//      - delete the key from the set of old keys. (it will be used to delete old keys)
 	for k, v := range newMap {
 		newKeys[k] = struct{}{}
-		if _, ok := oldKeys[k]; !ok {
-			putBucket[k] = v // add keys that did not previously exist in the map.
-			continue
-		}
 
-		updateKeys = append(updateKeys, k)
-		updateValues = append(updateValues, v)
+		keys = append(keys, k)
+		values = append(values, v)
 		delete(oldKeys, k)
 	}
 
 	// -- iterate over old keys that does not exist in the new map.
 	for k := range oldKeys {
-		deleteKeys = append(deleteKeys, k)
+		toDelete = append(toDelete, k)
 	}
 
-	// -- DELETE
-	if len(deleteKeys) > 0 {
-		if _, err := passiveMap.BatchDelete(deleteKeys, nil); err != nil {
+	// -- DELETE_BATCH
+	// Delete entries first to avoid exceeding max map size.
+	if len(toDelete) > 0 {
+		if _, err := passiveMap.BatchDelete(toDelete, nil); err != nil {
 			return err
 		}
 	}
 
-	// -- UPDATE
-	if len(updateKeys) > 0 {
-		if _, err := passiveMap.BatchUpdate(updateKeys, updateValues, nil); err != nil {
-			return err
-		}
-	}
-
-	// -- PUT
-	for k, v := range putBucket {
-		if err := passiveMap.Put(k, v); err != nil {
+	// -- UPDATE_BATCH
+	// Only BPF_ANY is supported, hence UPDATE_BATCH is in fact a PUT operation.
+	// - https://github.com/torvalds/linux/blob/master/kernel/bpf/syscall.c#L1981
+	// - https://github.com/torvalds/linux/blob/master/kernel/bpf/arraymap.c#L888
+	if len(keys) > 0 {
+		if _, err := passiveMap.BatchUpdate(keys, values, nil); err != nil {
 			return err
 		}
 	}
