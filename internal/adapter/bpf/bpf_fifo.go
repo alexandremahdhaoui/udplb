@@ -28,8 +28,17 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 )
 
-// FIFO is thread-safe.
-// Subscribe can be called only one time.
+// FIFO[T] can be used to subscribe to structured notifications produced
+// by a bpf program.
+//
+// Generics constraints:
+// - T must be a **struct**.
+// - T must not be a pointer.
+// - T must not be an interface.
+//
+// Notes:
+// - FIFO is thread-safe.
+// - Subscribe() can be called only once.
 type FIFO[T any] interface {
 	Subscribe() (<-chan T, error)
 }
@@ -40,6 +49,10 @@ type bpfFifo[T any] struct {
 	inUse bool
 }
 
+// Generics constraints:
+// - T must be a **struct**.
+// - T must not be a pointer.
+// - T must not be an interface.
 func NewFIFO[T any](ringbufMap *ebpf.Map) (FIFO[T], error) {
 	rb, err := ringbuf.NewReader(ringbufMap)
 	if err != nil {

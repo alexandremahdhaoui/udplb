@@ -192,7 +192,10 @@ func (m *bpfMap[K, V]) set(newMap map[K]V) error {
 	}
 
 	// -- UPDATE_BATCH
-	// Only BPF_ANY is supported, hence UPDATE_BATCH is in fact a PUT operation.
+	// Only BPF_ANY is supported, hence UPDATE_BATCH is in fact a batched PUT operation.
+	// NB: BPF_ANY is equal to 0, hence we can leave *BatchOptions{} to nil.
+	//
+	// Links:
 	// - https://github.com/torvalds/linux/blob/master/kernel/bpf/syscall.c#L1981
 	// - https://github.com/torvalds/linux/blob/master/kernel/bpf/arraymap.c#L888
 	if len(keys) > 0 {
