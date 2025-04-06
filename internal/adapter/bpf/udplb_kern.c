@@ -220,40 +220,46 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     lookup_table_t *lup = get_active_lookup_table();
     sessions_t *sess = get_active_sessions();
 
-    // -- compute modulo
-    __u32 key = hash_modulo(iph, struct iphdr, config.lookup_table_size);
+    // -- compute key from session id
+    __u32 key = udpd->session_id % config.lookup_table_size;
 
-    // -- backend index from sessions
-    __u8 new_session = 0; // false
+    // -- get backend index from sessions
     __u32 *backend_idx = bpf_map_lookup_elem(sess, &key);
-    if (!backend_idx) {
-        // -- backend index from lookup table
-        new_session = 1; // true
+    __u8 new_session = (backend_idx == NULL);
+
+    // -- get idx from lookup table if new session
+    if (new_session) {
         backend_idx = bpf_map_lookup_elem(lup, &key);
-        if (!backend_idx) { // return if no backend idx
-            bpf_printk("[ERROR] cannot load balance packet: no backend");
+        if (backend_idx == NULL) {
+            bpf_printk(
+                "[ERROR] cannot load balance packet: lookup table error");
             return XDP_PASS;
         }
     }
 
     // -- backend spec
     backend_spec_t *backend = bpf_map_lookup_elem(backends, backend_idx);
-    if (!backend) {
-        bpf_printk("[ERROR] cannot load balance packet: no backend available");
+    if (backend == NULL) {
+        bpf_printk("[ERROR] cannot load balance packet: no backend found");
         return XDP_PASS;
     }
 
-    // persist the hash_modulo to backend_idx mapping.
+    // persist assignment if new session
     if (new_session) {
         session_assignment_t assignment = {
             .backend_id = backend->id,
             .session_id = udpd->session_id,
         };
 
+        // notify userland about this new assignment.
         long err = bpf_map_push_elem(&sessions_fifo, &assignment, BPF_ANY);
+        if (err < 0)
+            bpf_printk("[ERROR] unable to add new session to fifo");
+
+        // persist "locally" (i.e. in the active bpf map)
         err = bpf_map_update_elem(sess, &key, backend_idx, BPF_ANY);
         if (err < 0)
-            bpf_printk("[ERROR] unable to map session");
+            bpf_printk("[ERROR] unable to map new session");
     }
 
     // -------------------------------

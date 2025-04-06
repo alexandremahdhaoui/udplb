@@ -131,23 +131,6 @@ static __always_inline __u16 udphdr_csum(struct udphdr *udph) {
 }
 
 // ---------------------------------------------------------------------------
-// -- FAST HASH
-// ---------------------------------------------------------------------------
-
-// computes the hash of x of size y and return its z modulo
-#define hash_modulo(x, y, z) fast_hash((const char *)x, sizeof(y)) % z
-
-// computes a fast hash
-// TODO: benchmark this func w/ other hash funcs.
-static __always_inline __u32 fast_hash(const char *str, __u32 len) {
-    __u32 hash = 0;
-    for (int i = 0; i < len; i++)
-        hash = (*str++) + (hash << 6) + (hash << 16) - hash;
-
-    return hash;
-}
-
-// ---------------------------------------------------------------------------
 // -- DEBUG
 // ---------------------------------------------------------------------------
 
