@@ -117,12 +117,12 @@ the 2 backends has reached max capacity?
 
 **UDPLB's datagram header format**
 
-UDPLB expects a session Id of length 16 bytes (128 bits).
+UDPLB expects a 4 byte prefix and a session Id of length 16 bytes (128 bits).
 
 ```
                   0      7 8     15 16    23 24    31
                  +--------+--------+--------+--------+
-                 |            Session Id             |
+                 |  0x55  |  0x55  |  0x49  |  0x44  |
                  |            (0-31 bit)             |
                  +--------+--------+--------+--------+
                  |            Session Id             |
@@ -133,6 +133,9 @@ UDPLB expects a session Id of length 16 bytes (128 bits).
                  +--------+--------+--------+--------+
                  |            Session Id             |
                  |           (96-127 bit)            |
+                 +--------+--------+--------+--------+
+                 |            Session Id             |
+                 |           (128-159 bit)           |
                  +--------+--------+--------+--------+
                  |
                  |          data octets ...

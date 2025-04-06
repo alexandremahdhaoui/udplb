@@ -209,6 +209,7 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     struct ethhdr *ethh = data;
     struct iphdr *iph = (struct iphdr *)(ethh + 1);
     struct udphdr *udph = (struct udphdr *)(iph + 1);
+    struct udpdata *udpd = (struct udpdata *)(udph + 1);
     debug_recv(ethh, iph);
 
     // -------------------------------
@@ -244,11 +245,9 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
 
     // persist the hash_modulo to backend_idx mapping.
     if (new_session) {
-        // TODO: get session id
-        __u128 session_id = 0;
         session_assignment_t assignment = {
             .backend_id = backend->id,
-            .session_id = session_id,
+            .session_id = udpd->session_id,
         };
 
         long err = bpf_map_push_elem(&sessions_fifo, &assignment, BPF_ANY);
