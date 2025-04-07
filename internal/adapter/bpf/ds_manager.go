@@ -272,7 +272,7 @@ func (mgr *dsManager) await(e *event) error {
 // -------------------------------------------------------------------
 
 func (mgr *dsManager) AssignmentSubscribe() (<-chan Assignment, error) {
-	ch, err := mgr.objs.Assignment.Subscribe()
+	ch, err := mgr.objs.AssignmentFIFO.Subscribe()
 	if err != nil {
 		return nil, err
 	}

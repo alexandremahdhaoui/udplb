@@ -42,8 +42,14 @@ type Objects struct {
 	// - Use that index to get the spec of the associated backend in the backends array.
 	LookupTable Array[uint32]
 
-	// TODO: add "AssignmentFIFO" of type bpfadapter.FIFO[udplbSessionAssignmentT].
-	Assignment FIFO[udplbAssignmentT]
+	// AssignmentFIFO is a bpf.FIFO of udplbAssignmentT.
+	// It is used to notify userland about newly discovered session-backend assignment.
+	// The userland program MUST notify other loadbalancer instances about this newly
+	// discovered assignment.
+	// The userland program MUST update its internal session map in order to avoid
+	// overwritting these newly discovered assignment when setting and switching over
+	// the SessionMap bpf data structure.
+	AssignmentFIFO FIFO[udplbAssignmentT]
 
 	// SessionMap maps a session id to a specific backend, if the backend transitions from
 	// StateAvailable to StateUnschedulable, existing packet destinated to an existing session
@@ -67,7 +73,7 @@ func NewObjects(prog UDPLB) (Objects, error) {
 	}
 	objs := concrete.objs
 
-	backends, err := NewArray[*udplbBackendSpecT](
+	backendList, err := NewArray[*udplbBackendSpecT](
 		objs.BackendListA,
 		objs.BackendListB,
 		objs.BackendListA_len,
@@ -89,18 +95,27 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		return Objects{}, err
 	}
 
-	sessions, err := NewMap[uuid.UUID, uint32](
+	sessionMap, err := NewMap[uuid.UUID, uint32](
 		objs.SessionMapA,
 		objs.SessionMapB,
 		objs.SessionMapA_len,
 		objs.SessionMapB_len,
 		objs.ActivePointer,
 	)
+	if err != nil {
+		return Objects{}, err
+	}
+
+	assignmentFIFO, err := NewFIFO[udplbAssignmentT](objs.AssignmentRingbuf)
+	if err != nil {
+		return Objects{}, err
+	}
 
 	return Objects{
-		BackendList: backends,
-		LookupTable: lookupTable,
-		SessionMap:  sessions,
+		BackendList:    backendList,
+		LookupTable:    lookupTable,
+		AssignmentFIFO: assignmentFIFO,
+		SessionMap:     sessionMap,
 	}, nil
 }
 
