@@ -17,7 +17,6 @@ package bpfadapter
 
 import (
 	"errors"
-	"sync"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -94,8 +93,7 @@ type dsManager struct {
 	name string
 	objs Objects
 
-	eventCh           chan *event
-	eventLoopOnceFunc func()
+	eventCh chan *event
 
 	running     bool
 	doneCh      chan struct{}
@@ -107,19 +105,15 @@ func NewDataStructureManager(name string, objs Objects) (DataStructureManager, e
 		name: name,
 		objs: objs,
 
-		eventCh:           make(chan *event),
-		eventLoopOnceFunc: nil,
+		eventCh: make(chan *event),
 
 		running:     false,
 		doneCh:      make(chan struct{}),
 		terminateCh: make(chan struct{}),
 	}
 
-	mgr.eventLoopOnceFunc = sync.OnceFunc(mgr.eventLoop)
-
-	if err := mgr.Start(); err != nil {
-		return nil, err
-	}
+	go mgr.eventLoop()
+	mgr.running = true
 
 	return mgr, nil
 }
@@ -208,9 +202,14 @@ func newEvent(kind eventKind, v any) (*event, error) {
 // possible.
 //
 // Please note this function must be executed only once. If the struct was gracefully
-// shut down and you want to start it again, then you must initialize another struct.
+// shut down and you want to start it again, then you must initialize another dsManager
+// struct.
 func (mgr *dsManager) eventLoop() {
 	for {
+		// TODO: terminate eventLoop if "objs struct" is closed. (require objs.DoneCloser implemented)
+		// case <- mgr.objs.Done():
+		//     mgr.Close()
+		//     return
 		select {
 		// receive an event.
 		case e := <-mgr.eventCh:
@@ -395,23 +394,15 @@ func transformBackendList(in []types.Backend) (out []*udplbBackendSpecT) {
 }
 
 // -------------------------------------------------------------------
-// -- Start
-// -------------------------------------------------------------------
-
-// Start implements DataStructureManager.
-func (mgr *dsManager) Start() error {
-	mgr.eventLoopOnceFunc()
-	return nil
-}
-
-// -------------------------------------------------------------------
 // -- DoneCloser
 // -------------------------------------------------------------------
 
-// Close implements DataStructureManager.
+// Close is idempotent.
+// Close always returns nil.
+// TODO: force closing by using timeout?
 func (mgr *dsManager) Close() error {
 	if !mgr.running {
-		return flaterrors.Join(ErrCannotTerminateDSManagerIfNotStarted, ErrClosingDSManager)
+		return nil
 	}
 
 	// Triggers termination of the event loop
@@ -420,6 +411,8 @@ func (mgr *dsManager) Close() error {
 	<-mgr.doneCh
 	// Safely close the event channel.
 	close(mgr.eventCh)
+	// Inform that the manager is not running anymore.
+	mgr.running = false
 
 	return nil
 }

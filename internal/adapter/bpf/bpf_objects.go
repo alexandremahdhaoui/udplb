@@ -15,13 +15,24 @@
  */
 package bpfadapter
 
-import "github.com/google/uuid"
+import (
+	"github.com/alexandremahdhaoui/udplb/internal/types"
+	"github.com/google/uuid"
+)
 
 // -------------------------------------------------------------------
 // -- OBJECTS
 // -------------------------------------------------------------------
 
+var _ types.DoneCloser = Objects{}
+
 // Wraps the following ebpf objects with a convenient interface for testing.
+//
+// Objects implements DoneCloser.
+//   - Close will propagate to all internal data structures. It will also close the
+//     bpf data structure.
+//   - The expression "<- Done()" returns when all internal data structures are done.
+//     done.
 type Objects struct {
 	// BackendList is a BPFArray of available udplbBackendSpecT ordered by id of size n'.
 	// NB:
@@ -119,23 +130,35 @@ func NewObjects(prog UDPLB) (Objects, error) {
 	}, nil
 }
 
+// Close implements types.DoneCloser.
+func (o Objects) Close() error {
+	panic("unimplemented")
+}
+
+// Done implements types.DoneCloser.
+func (o Objects) Done() <-chan struct{} {
+	panic("unimplemented")
+}
+
 // -------------------------------------------------------------------
 // -- FAKE OBJECTS
 // -------------------------------------------------------------------
 
 var (
-	_ Array[any]       = &FakeBPFArray[any]{}
-	_ Map[uint32, any] = &FakeBPFMap[uint32, any]{}
-	_ Variable[any]    = &FakeBPFVariable[any]{}
+	_ Array[any]       = &FakeArray[any]{}
+	_ FIFO[any]        = &FakeFIFO[any]{}
+	_ Map[uint32, any] = &FakeMap[uint32, any]{}
+	// _ Variable[any]    = &FakeVariable[any]{}
 )
 
 // TODO: fix fake objects
 
 func NewFakeObjects() Objects {
 	return Objects{
-		BackendList: NewFakeBackendList(),
-		LookupTable: NewFakeLookupTable(),
-		SessionMap:  NewFakeSessionMap,
+		BackendList:    NewFakeArray[*udplbBackendSpecT](),
+		LookupTable:    NewFakeArray[uint32](),
+		AssignmentFIFO: NewFakeFIFO[udplbAssignmentT](),
+		SessionMap:     NewFakeMap[uuid.UUID, uint32](),
 	}
 }
 
@@ -143,49 +166,106 @@ func NewFakeObjects() Objects {
 // -- FAKE BPF ARRAY
 // -------------------------------------------------------------------
 
-// TODO: either create the fake bpf array or just use mocks.
-
-// -------------------------------------------------------------------
-// -- FAKE BPF MAP
-// -------------------------------------------------------------------
-
-type FakeBPFMap[K comparable, V any] struct {
-	Map map[K]V
+type FakeArray[T any] struct {
+	Array []T
 }
 
-// Set implements BPFMap.
-func (m *FakeBPFMap[K, V]) Set(kv map[K]V) error {
-	m.Map = kv
-	return nil
+// Set implements Array.
+func (f *FakeArray[T]) Set(values []T) error {
+	panic("unimplemented")
 }
 
-// SetAndDeferSwitchover implements BPFMap.
-func (m *FakeBPFMap[K, V]) SetAndDeferSwitchover(kv map[K]V) (func(), error) {
-	return func() {
-		m.Map = kv
-	}, nil
+// SetAndDeferSwitchover implements Array.
+func (f *FakeArray[T]) SetAndDeferSwitchover(values []T) (func(), error) {
+	panic("unimplemented")
 }
 
-func NewFakeBackendList() *FakeBPFMap[uint32, *udplbBackendSpecT] {
-	return &FakeBPFMap[uint32, *udplbBackendSpecT]{
-		Map: make(map[uint32]*udplbBackendSpecT),
+func NewFakeArray[T any]() *FakeArray[T] {
+	return &FakeArray[T]{
+		Array: make([]T, 0),
 	}
 }
 
 // -------------------------------------------------------------------
-// -- FAKE BPF VARIABLE
+// -- FAKE MAP
 // -------------------------------------------------------------------
 
-type FakeBPFVariable[T any] struct {
-	v T
+type expector struct {
+	expectationList []FakeExpectation
 }
 
-// Set implements BPFVariable.
-func (v *FakeBPFVariable[T]) Set(newVar T) error {
-	v.v = newVar
+func (e *expector) AppendExpectation(expectation FakeExpectation) *expector {
+	e.expectations = append(e.expectations, expectation)
+	return e
+}
+
+func checkExpectationAndIncrement(expectation FakeExpectation) {
+}
+
+type FakeExpectation struct {
+	Method string
+	Err    error
+}
+
+type FakeMap[K comparable, V any] struct {
+	Map          map[K]V
+	Expectations []FakeExpectation
+	expector
+}
+
+// BatchDelete implements Map.
+func (f *FakeMap[K, V]) BatchDelete(keys []K) error {
+	if len(f.Expectations) == 0 {
+		panic("did not expect call to FakeMap.BatchDelete")
+	}
+	if f.Expectations[0].Method != "BatchDelete" {
+		panic("did not expect call to FakeMap.BatchDelete")
+	}
+	if err := f.Expectations[0].Err; err != nil {
+		return err
+	}
+	for _, k := range keys {
+		delete(f.Map, k)
+	}
 	return nil
 }
 
-func NewFakeVariable[T any](v T) *FakeBPFVariable[T] {
-	return &FakeBPFVariable[T]{v}
+// BatchUpdate implements Map.
+func (f *FakeMap[K, V]) BatchUpdate(kv map[K]V) error {
+	panic("unimplemented")
+}
+
+// Set implements Map.
+func (f *FakeMap[K, V]) Set(newMap map[K]V) error {
+	panic("unimplemented")
+}
+
+// SetAndDeferSwitchover implements Map.
+func (f *FakeMap[K, V]) SetAndDeferSwitchover(newMap map[K]V) (func(), error) {
+	panic("unimplemented")
+}
+
+func NewFakeMap[K comparable, V any]() *FakeMap[K, V] {
+	return &FakeMap[K, V]{
+		Map: make(map[K]V),
+	}
+}
+
+// -------------------------------------------------------------------
+// -- FAKE FIFO
+// -------------------------------------------------------------------
+
+type FakeFIFO[T any] struct {
+	Chan chan T
+}
+
+// Subscribe implements FIFO.
+func (f *FakeFIFO[T]) Subscribe() (<-chan T, error) {
+	panic("unimplemented")
+}
+
+func NewFakeFIFO[T any]() *FakeFIFO[T] {
+	return &FakeFIFO[T]{
+		Chan: make(chan T),
+	}
 }
