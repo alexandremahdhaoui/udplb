@@ -30,8 +30,18 @@ import (
 
 // Wraps bpf objects with a convenient interface for testing.
 type Map[K comparable, V any] interface {
+	// Update in batch a set of entries in the ACTIVE map.
+	// This method does not perform a switchover.
+	// This method mutates the ACTIVE map.
+	BatchUpdate(kv map[K]V) error
+
+	// Delete in batch a set of keys from the ACTIVE map.
+	// This method does not perform a switchover.
+	// This method mutates the ACTIVE map.
+	BatchDelete([]K) error
+
 	// Set all values of the BPF map to the one of the input map.
-	Set(kv map[K]V) error
+	Set(newMap map[K]V) error
 
 	// SetAndDeferSwitchover updates the passive internal map but does
 	// not perform the switchover.
@@ -50,7 +60,7 @@ type Map[K comparable, V any] interface {
 	// "activePointer" bpf variable is used for multiple data structures.
 	// The deferable switchover function must be called because it updates
 	// internal variables in userspace.
-	SetAndDeferSwitchover(kv map[K]V) (func(), error)
+	SetAndDeferSwitchover(newMap map[K]V) (func(), error)
 }
 
 type bpfMap[K comparable, V any] struct {
@@ -109,7 +119,29 @@ func NewMap[K comparable, V any](
 	}, nil
 }
 
-// Set implements BPFMap.
+func (m *bpfMap[K, V]) BatchUpdate(kv map[K]V) error {
+	keys, values := make([]K, len(kv)), make([]V, len(kv))
+	i := 0
+	for k, v := range kv {
+		keys[i] = k
+		values[i] = v
+		i++
+	}
+	active := m.getActiveMap()
+	if _, err := active.BatchUpdate(keys, values, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *bpfMap[K, V]) BatchDelete(keys []K) error {
+	active := m.getActiveMap()
+	if _, err := active.BatchDelete(keys, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *bpfMap[K, V]) Set(newMap map[K]V) error {
 	if err := m.set(newMap); err != nil {
 		return err
@@ -222,6 +254,13 @@ func (m *bpfMap[K, V]) switchover() error {
 	}
 	m.activePointerCache = newActive
 	return nil
+}
+
+func (m *bpfMap[K, V]) getActiveMap() *ebpf.Map {
+	if m.activePointerCache == 0 {
+		return m.a
+	}
+	return m.b
 }
 
 func (m *bpfMap[K, V]) getPassiveMap() *ebpf.Map {

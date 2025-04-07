@@ -44,30 +44,75 @@ var (
 	ErrDSManagerIsShuttingDown = errors.New("dsManager is shutting down")
 )
 
+type Assignment = udplbAssignmentT
+
 // -------------------------------------------------------------------
 // -- DATA STRUCTURE MANAGER
 // -------------------------------------------------------------------
 
+// All method of DataStructureManager must be thread-safe
 type DataStructureManager interface {
 	types.DoneCloser
 
-	// Set is thread-safe.
-	Set(
-		backends []types.Backend,
+	// Overwrite existing objects with new objects.
+	SetObjects(
+		backendList []types.Backend,
+		// The items refers to the index of a backend in the backendList.
 		lookupTable []uint32,
-		sessions map[uuid.UUID]uint32,
+		// The keys refers to a session id.
+		// The values refers to the index of a backend in the backendList.
+		sessionMap map[uuid.UUID]uint32,
 	) error
+
+	// -- Assignment
+
+	// It returns a chan notifying new session assignments.
+	//
+	// There is no point in calling SessionBatchUpdate with
+	// assignment obtains by this method, because the BPF program
+	// already set them to the active map.
+	//
+	// However the user of AssignmentSubscribe must update their
+	// internal representation of the assignment/session map.
+	AssignmentSubscribe() (<-chan Assignment, error)
+
+	// -- Session
+
+	// Quickly update keys from the active session map.
+	// NB: To mutate passive maps and trigger a switchover please use SetObjects.
+	SessionBatchUpdate(map[uuid.UUID]uint32) error
+	// Quickly delete keys from the active session map.
+	// NB: To mutate passive maps and trigger a switchover please use SetObjects.
+	SessionBatchDelete(...uuid.UUID) error
+}
+
+// -------------------------------------------------------------------
+// -- CONCRETE IMPLEMENTATION
+// -------------------------------------------------------------------
+
+type dsManager struct {
+	name string
+	objs Objects
+
+	eventCh           chan *event
+	eventLoopOnceFunc func()
+
+	running     bool
+	doneCh      chan struct{}
+	terminateCh chan struct{}
 }
 
 func NewDataStructureManager(name string, objs Objects) (DataStructureManager, error) {
 	mgr := &dsManager{
-		name:              name,
-		objs:              objs,
-		started:           false,
-		doneCh:            make(chan struct{}),
-		eventCh:           make(chan event),
-		terminateCh:       make(chan struct{}),
+		name: name,
+		objs: objs,
+
+		eventCh:           make(chan *event),
 		eventLoopOnceFunc: nil,
+
+		running:     false,
+		doneCh:      make(chan struct{}),
+		terminateCh: make(chan struct{}),
 	}
 
 	mgr.eventLoopOnceFunc = sync.OnceFunc(mgr.eventLoop)
@@ -80,56 +125,212 @@ func NewDataStructureManager(name string, objs Objects) (DataStructureManager, e
 }
 
 // -------------------------------------------------------------------
-// -- CONCRETE IMPLEMENTATION
+// -- eventLoop
 // -------------------------------------------------------------------
 
-type dsManager struct {
-	name string
-	objs Objects
+// -- internal events
 
-	started     bool
-	doneCh      chan struct{}
-	eventCh     chan event
-	terminateCh chan struct{}
+type eventKind string
 
-	eventLoopOnceFunc func()
+const (
+	eventKindUnknown            eventKind = "UNKNOWN"
+	eventKindSet                eventKind = "Set"
+	eventKindSessionBatchUpdate eventKind = "SessionBatchUpdate"
+	eventKindSessionBatchDelete eventKind = "SessionBatchDelete"
+)
+
+// All objects must be set.
+type eventObjects struct {
+	BackendList []*udplbBackendSpecT
+	LookupTable []uint32
+	SessionMap  map[uuid.UUID]uint32
 }
 
-// -------------------------------------------------------------------
-// -- DoneCloser
-// -------------------------------------------------------------------
+type event struct {
+	kind  eventKind
+	errCh chan error
 
-// Close implements DataStructureManager.
-func (mgr *dsManager) Close() error {
-	if !mgr.started {
-		return flaterrors.Join(ErrCannotTerminateDSManagerIfNotStarted, ErrClosingDSManager)
+	set                eventObjects
+	sessionBatchUpdate map[uuid.UUID]uint32
+	sessionBatchDelete []uuid.UUID // a list of session id to delete
+}
+
+func (e *event) Close() error {
+	close(e.errCh)
+	return nil
+}
+
+var (
+	ErrInvalidObjectType     = errors.New("invalid object type")
+	ErrCreatingInternalEvent = errors.New("creating internal event")
+)
+
+func newEvent(kind eventKind, v any) (*event, error) {
+	var (
+		e   event
+		ok  bool
+		err error
+	)
+
+	switch kind {
+	default:
+		err = ErrUnknownEventKind
+	case eventKindSet:
+		e.set, ok = v.(eventObjects)
+	case eventKindSessionBatchUpdate:
+		e.sessionBatchUpdate, ok = v.(map[uuid.UUID]uint32)
+	case eventKindSessionBatchDelete:
+		e.sessionBatchDelete, ok = v.([]uuid.UUID)
 	}
 
-	// Triggers termination of the event loop
-	close(mgr.terminateCh)
-	// Await graceful termination
-	<-mgr.doneCh
-	// Safely close the event channel.
-	close(mgr.eventCh)
+	if err != nil {
+		return nil, flaterrors.Join(err, ErrCreatingInternalEvent)
+	}
+
+	if !ok {
+		return nil, flaterrors.Join(ErrInvalidObjectType, ErrCreatingInternalEvent)
+	}
+
+	return &event{
+		kind:               kind,
+		errCh:              make(chan error),
+		set:                e.set,
+		sessionBatchUpdate: e.sessionBatchUpdate,
+		sessionBatchDelete: e.sessionBatchDelete,
+	}, nil
+}
+
+// -- eventloop
+
+// This loop ensures that only one goroutine is updating the internal bpf data
+// structures at a time. This synchronization pattern avoids using mutexes. Hence,
+// we do not lock these datastructures, and changes are propagated as quickly as
+// possible.
+//
+// Please note this function must be executed only once. If the struct was gracefully
+// shut down and you want to start it again, then you must initialize another struct.
+func (mgr *dsManager) eventLoop() {
+	for {
+		select {
+		// receive an event.
+		case e := <-mgr.eventCh:
+			mgr.handleEvent(e)
+		// break the event loop if graceful shutdown signal is received.
+		case <-mgr.terminateCh:
+			close(mgr.doneCh)
+			return
+		// also break the loop if the manager is set as "done" for any reason.
+		case <-mgr.doneCh:
+			return
+		}
+	}
+}
+
+func (mgr *dsManager) handleEvent(e *event) {
+	defer e.Close()
+	var err error
+
+	switch e.kind {
+	default:
+		err = ErrUnknownEventKind
+		e.kind = eventKindUnknown
+	case eventKindSet:
+		err = mgr.setObjects(e.set)
+	case eventKindSessionBatchUpdate:
+		err = mgr.assignmentBatchUpdate(e.sessionBatchUpdate)
+	case eventKindSessionBatchDelete:
+		err = mgr.assignmentBatchDelete(e.sessionBatchDelete)
+	}
+
+	if err != nil {
+		e.errCh <- err
+	}
+}
+
+// -- await event
+
+// await until the operation is done or the manager is terminated.
+func (mgr *dsManager) await(e *event) error {
+	// await until the operation is done or the manager is terminated.
+	select {
+	case err := <-e.errCh:
+		if err != nil {
+			return err
+		}
+	case <-mgr.doneCh:
+		return flaterrors.Join(
+			ErrOperationAborted,
+			ErrDSManagerIsShuttingDown,
+		)
+	}
 
 	return nil
 }
 
-// Done implements DataStructureManager.
-func (mgr *dsManager) Done() <-chan struct{} {
-	return mgr.doneCh
+// -------------------------------------------------------------------
+// -- SUBSCRIBE ASSIGNMENT
+// -------------------------------------------------------------------
+
+func (mgr *dsManager) AssignmentSubscribe() (<-chan Assignment, error) {
+	ch, err := mgr.objs.Assignment.Subscribe()
+	if err != nil {
+		return nil, err
+	}
+	return ch, nil
+}
+
+// -------------------------------------------------------------------
+// -- SESSION BATCH DELETE/UPDATE
+// -------------------------------------------------------------------
+
+func (mgr *dsManager) SessionBatchDelete(batch ...uuid.UUID) error {
+	e, err := newEvent(eventKindSessionBatchDelete, batch)
+	if err != nil {
+		return err
+	}
+	mgr.eventCh <- e
+	if err := mgr.await(e); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (mgr *dsManager) assignmentBatchDelete(batch []uuid.UUID) error {
+	if err := mgr.objs.SessionMap.BatchDelete(batch); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (mgr *dsManager) SessionBatchUpdate(batch map[uuid.UUID]uint32) error {
+	e, err := newEvent(eventKindSessionBatchUpdate, batch)
+	if err != nil {
+		return err
+	}
+	mgr.eventCh <- e
+	if err := mgr.await(e); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (mgr *dsManager) assignmentBatchUpdate(batch map[uuid.UUID]uint32) error {
+	if err := mgr.objs.SessionMap.BatchUpdate(batch); err != nil {
+		return err
+	}
+	return nil
 }
 
 // -------------------------------------------------------------------
 // -- Set
 // -------------------------------------------------------------------
 
-func (mgr *dsManager) Set(
-	backends []types.Backend,
+func (mgr *dsManager) SetObjects(
+	backendList []types.Backend,
 	lookupTable []uint32,
-	sessions map[uuid.UUID]uint32,
+	sessionMap map[uuid.UUID]uint32,
 ) error {
-	if util.AnyPtrIsNil(backends, lookupTable, sessions) {
+	if util.AnyPtrIsNil(backendList, lookupTable, sessionMap) {
 		return flaterrors.Join(
 			ErrObjectsMustNotBeNil,
 			ErrInvalidArguments,
@@ -137,33 +338,48 @@ func (mgr *dsManager) Set(
 		)
 	}
 
-	e := newEvent(eventKindSet, eventObjects{
-		Backends:    TransformBackends(backends),
+	e, err := newEvent(eventKindSet, eventObjects{
+		BackendList: transformBackendList(backendList),
 		LookupTable: lookupTable,
-		Sessions:    sessions,
+		SessionMap:  sessionMap,
 	})
+	if err != nil {
+		return flaterrors.Join(err, ErrSettingObjectsDSManager)
+	}
 
 	// send event.
 	mgr.eventCh <- e
-
-	// await until the operation is done or the manager is terminated.
-	select {
-	case err := <-e.errCh:
-		if err != nil {
-			return flaterrors.Join(err, ErrSettingObjectsDSManager)
-		}
-	case <-mgr.doneCh:
-		return flaterrors.Join(
-			ErrOperationAborted,
-			ErrDSManagerIsShuttingDown,
-			ErrSettingObjectsDSManager,
-		)
+	if err := mgr.await(e); err != nil {
+		return flaterrors.Join(err, ErrSettingObjectsDSManager)
 	}
 
 	return nil
 }
 
-func TransformBackends(in []types.Backend) (out []*udplbBackendSpecT) {
+func (mgr *dsManager) setObjects(objs eventObjects) error {
+	bSwitchover, err := mgr.objs.BackendList.SetAndDeferSwitchover(objs.BackendList)
+	if err != nil {
+		return err
+	}
+
+	lupSwitchover, err := mgr.objs.LookupTable.SetAndDeferSwitchover(objs.LookupTable)
+	if err != nil {
+		return err
+	}
+
+	sSwitchover, err := mgr.objs.SessionMap.SetAndDeferSwitchover(objs.SessionMap)
+	if err != nil {
+		return err
+	}
+
+	bSwitchover()
+	lupSwitchover()
+	sSwitchover()
+
+	return nil
+}
+
+func transformBackendList(in []types.Backend) (out []*udplbBackendSpecT) {
 	out = make([]*udplbBackendSpecT, len(in))
 
 	for i, b := range in {
@@ -189,75 +405,28 @@ func (mgr *dsManager) Start() error {
 }
 
 // -------------------------------------------------------------------
-// -- eventLoop
+// -- DoneCloser
 // -------------------------------------------------------------------
 
-// This loop ensures that only one goroutine is updating the internal bpf data
-// structures at a time. This synchronization pattern avoids using mutexes. Hence,
-// we do not lock these datastructures, and changes are propagated as quickly as
-// possible.
-//
-// Please note this function must be executed only once. If the struct was gracefully
-// shut down and you want to start it again, then you must initialize another struct.
-func (mgr *dsManager) eventLoop() {
-	for {
-		var e event
-
-		select {
-		// receive an event.
-		case e = <-mgr.eventCh:
-		// break the event loop if graceful shutdown signal is received.
-		case <-mgr.terminateCh:
-			close(mgr.doneCh)
-			break
-		// also break the loop if the manager is set as "done" for any reason.
-		case <-mgr.doneCh:
-			break
-		}
-
-		// perform event
-		var err error
-		switch e.kind {
-		default:
-			err = ErrUnknownEventKind
-			e.kind = eventKindUnknown
-		case eventKindSet:
-			err = mgr.setObjects(e.set)
-		}
-
-		if err != nil {
-			e.errCh <- err
-		}
-
-		close(e.errCh)
-	}
-}
-
-// -------------------------------------------------------------------
-// -- setObjects
-// -------------------------------------------------------------------
-
-func (mgr *dsManager) setObjects(objs eventObjects) error {
-	backendsSwitchover, err := mgr.objs.BackendList.SetAndDeferSwitchover(objs.Backends)
-	if err != nil {
-		return err
+// Close implements DataStructureManager.
+func (mgr *dsManager) Close() error {
+	if !mgr.running {
+		return flaterrors.Join(ErrCannotTerminateDSManagerIfNotStarted, ErrClosingDSManager)
 	}
 
-	lupSwitchover, err := mgr.objs.LookupTable.SetAndDeferSwitchover(objs.LookupTable)
-	if err != nil {
-		return err
-	}
-
-	sessionsSwitchover, err := mgr.objs.SessionMap.SetAndDeferSwitchover(objs.Sessions)
-	if err != nil {
-		return err
-	}
-
-	backendsSwitchover()
-	lupSwitchover()
-	sessionsSwitchover()
+	// Triggers termination of the event loop
+	close(mgr.terminateCh)
+	// Await graceful termination
+	<-mgr.doneCh
+	// Safely close the event channel.
+	close(mgr.eventCh)
 
 	return nil
+}
+
+// Done implements DataStructureManager.
+func (mgr *dsManager) Done() <-chan struct{} {
+	return mgr.doneCh
 }
 
 // -------------------------------------------------------------------
@@ -276,44 +445,4 @@ func retry(f func() error) error {
 		}
 	}
 	return flaterrors.Join(ErrExceededMaxRetries, errs)
-}
-
-// -------------------------------------------------------------------
-// -- EVENT
-// -------------------------------------------------------------------
-
-func newEvent(kind eventKind, obj eventObjects) event {
-	e := event{
-		kind:  kind,
-		errCh: make(chan error),
-	}
-
-	switch kind {
-	default:
-		panic("unknown event")
-	case eventKindSet:
-		e.set = obj
-	}
-
-	return e
-}
-
-type event struct {
-	kind  eventKind
-	set   eventObjects
-	errCh chan error
-}
-
-type eventKind string
-
-const (
-	eventKindUnknown eventKind = "UNKNOWN"
-	eventKindSet     eventKind = "Set"
-)
-
-// All objects must be set.
-type eventObjects struct {
-	Backends    []*udplbBackendSpecT
-	LookupTable []uint32
-	Sessions    map[uuid.UUID]uint32
 }
