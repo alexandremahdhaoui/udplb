@@ -16,7 +16,11 @@
 package bpfadapter
 
 import (
+	"errors"
+
 	"github.com/alexandremahdhaoui/udplb/internal/types"
+
+	"github.com/alexandremahdhaoui/ebpfstruct"
 	"github.com/google/uuid"
 )
 
@@ -38,7 +42,7 @@ type Objects struct {
 	// NB:
 	// - n is defined as the number of available backends.
 	// - n' is defined as the number of backends, e.g. in StateAvailable, StateUnschedulable...
-	BackendList Array[*udplbBackendSpecT]
+	BackendList ebpfstruct.Array[*udplbBackendSpecT]
 
 	// LookupTable is a BPFArray of uint32 and of size m.
 	// The integers stored in this list represents the index of an available backend in the
@@ -51,7 +55,7 @@ type Objects struct {
 	// - The above operation returned the index of an available backend in the
 	//   backends array.
 	// - Use that index to get the spec of the associated backend in the backends array.
-	LookupTable Array[uint32]
+	LookupTable ebpfstruct.Array[uint32]
 
 	// AssignmentFIFO is a bpf.FIFO of udplbAssignmentT.
 	// It is used to notify userland about newly discovered session-backend assignment.
@@ -60,7 +64,7 @@ type Objects struct {
 	// The userland program MUST update its internal session map in order to avoid
 	// overwritting these newly discovered assignment when setting and switching over
 	// the SessionMap bpf data structure.
-	AssignmentFIFO FIFO[udplbAssignmentT]
+	AssignmentFIFO ebpfstruct.FIFO[udplbAssignmentT]
 
 	// SessionMap maps a session id to a specific backend, if the backend transitions from
 	// StateAvailable to StateUnschedulable, existing packet destinated to an existing session
@@ -74,8 +78,12 @@ type Objects struct {
 	// - Check if session id is in the sessions map. If it does, then continue.
 	// - The above operation returned the index of a backend in the backends array.
 	// - Use that index to get the spec of the associated backend in the backends array.
-	SessionMap Map[uuid.UUID, uint32]
+	SessionMap ebpfstruct.Map[uuid.UUID, uint32]
 }
+
+var ErrCannotCreateObjectsFromUnknownUDPLBImplementation = errors.New(
+	"cannot create object from unknown udplb implementation",
+)
 
 func NewObjects(prog UDPLB) (Objects, error) {
 	concrete, ok := prog.(*udplb)
@@ -84,7 +92,7 @@ func NewObjects(prog UDPLB) (Objects, error) {
 	}
 	objs := concrete.objs
 
-	backendList, err := NewArray[*udplbBackendSpecT](
+	backendList, err := ebpfstruct.NewArray[*udplbBackendSpecT](
 		objs.BackendListA,
 		objs.BackendListB,
 		objs.BackendListA_len,
@@ -95,7 +103,7 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		return Objects{}, err
 	}
 
-	lookupTable, err := NewArray[uint32](
+	lookupTable, err := ebpfstruct.NewArray[uint32](
 		objs.LookupTableA,
 		objs.LookupTableB,
 		objs.LookupTableA_len,
@@ -106,7 +114,7 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		return Objects{}, err
 	}
 
-	sessionMap, err := NewMap[uuid.UUID, uint32](
+	sessionMap, err := ebpfstruct.NewMap[uuid.UUID, uint32](
 		objs.SessionMapA,
 		objs.SessionMapB,
 		objs.SessionMapA_len,
@@ -117,7 +125,7 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		return Objects{}, err
 	}
 
-	assignmentFIFO, err := NewFIFO[udplbAssignmentT](objs.AssignmentRingbuf)
+	assignmentFIFO, err := ebpfstruct.NewFIFO[udplbAssignmentT](objs.AssignmentRingbuf)
 	if err != nil {
 		return Objects{}, err
 	}
@@ -138,134 +146,4 @@ func (o Objects) Close() error {
 // Done implements types.DoneCloser.
 func (o Objects) Done() <-chan struct{} {
 	panic("unimplemented")
-}
-
-// -------------------------------------------------------------------
-// -- FAKE OBJECTS
-// -------------------------------------------------------------------
-
-var (
-	_ Array[any]       = &FakeArray[any]{}
-	_ FIFO[any]        = &FakeFIFO[any]{}
-	_ Map[uint32, any] = &FakeMap[uint32, any]{}
-	// _ Variable[any]    = &FakeVariable[any]{}
-)
-
-// TODO: fix fake objects
-
-func NewFakeObjects() Objects {
-	return Objects{
-		BackendList:    NewFakeArray[*udplbBackendSpecT](),
-		LookupTable:    NewFakeArray[uint32](),
-		AssignmentFIFO: NewFakeFIFO[udplbAssignmentT](),
-		SessionMap:     NewFakeMap[uuid.UUID, uint32](),
-	}
-}
-
-// -------------------------------------------------------------------
-// -- FAKE BPF ARRAY
-// -------------------------------------------------------------------
-
-type FakeArray[T any] struct {
-	Array []T
-}
-
-// Set implements Array.
-func (f *FakeArray[T]) Set(values []T) error {
-	panic("unimplemented")
-}
-
-// SetAndDeferSwitchover implements Array.
-func (f *FakeArray[T]) SetAndDeferSwitchover(values []T) (func(), error) {
-	panic("unimplemented")
-}
-
-func NewFakeArray[T any]() *FakeArray[T] {
-	return &FakeArray[T]{
-		Array: make([]T, 0),
-	}
-}
-
-// -------------------------------------------------------------------
-// -- FAKE MAP
-// -------------------------------------------------------------------
-
-type expector struct {
-	expectationList []FakeExpectation
-}
-
-func (e *expector) AppendExpectation(expectation FakeExpectation) *expector {
-	e.expectations = append(e.expectations, expectation)
-	return e
-}
-
-func checkExpectationAndIncrement(expectation FakeExpectation) {
-}
-
-type FakeExpectation struct {
-	Method string
-	Err    error
-}
-
-type FakeMap[K comparable, V any] struct {
-	Map          map[K]V
-	Expectations []FakeExpectation
-	expector
-}
-
-// BatchDelete implements Map.
-func (f *FakeMap[K, V]) BatchDelete(keys []K) error {
-	if len(f.Expectations) == 0 {
-		panic("did not expect call to FakeMap.BatchDelete")
-	}
-	if f.Expectations[0].Method != "BatchDelete" {
-		panic("did not expect call to FakeMap.BatchDelete")
-	}
-	if err := f.Expectations[0].Err; err != nil {
-		return err
-	}
-	for _, k := range keys {
-		delete(f.Map, k)
-	}
-	return nil
-}
-
-// BatchUpdate implements Map.
-func (f *FakeMap[K, V]) BatchUpdate(kv map[K]V) error {
-	panic("unimplemented")
-}
-
-// Set implements Map.
-func (f *FakeMap[K, V]) Set(newMap map[K]V) error {
-	panic("unimplemented")
-}
-
-// SetAndDeferSwitchover implements Map.
-func (f *FakeMap[K, V]) SetAndDeferSwitchover(newMap map[K]V) (func(), error) {
-	panic("unimplemented")
-}
-
-func NewFakeMap[K comparable, V any]() *FakeMap[K, V] {
-	return &FakeMap[K, V]{
-		Map: make(map[K]V),
-	}
-}
-
-// -------------------------------------------------------------------
-// -- FAKE FIFO
-// -------------------------------------------------------------------
-
-type FakeFIFO[T any] struct {
-	Chan chan T
-}
-
-// Subscribe implements FIFO.
-func (f *FakeFIFO[T]) Subscribe() (<-chan T, error) {
-	panic("unimplemented")
-}
-
-func NewFakeFIFO[T any]() *FakeFIFO[T] {
-	return &FakeFIFO[T]{
-		Chan: make(chan T),
-	}
 }
