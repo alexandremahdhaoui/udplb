@@ -27,9 +27,20 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-// ---------------------------------------------------------------------------
-// -- PACKET HELPERS
-// ---------------------------------------------------------------------------
+/*******************************************************************************
+ * PACKET HELPERS
+ *
+ ******************************************************************************/
+
+// ["U", "U", "I", "D"] in ASCII.
+#define UDPLB_PACKET_PREFIX (0x55 << 24) + (0x55 << 16) + (0x49 << 8) + 0x44
+
+// udpdata holds the udp prefix and session id stored in the udp datagram.
+// the prefix must be equal to 0x55554944.
+struct __attribute__((packed)) udpdata {
+    __u32 prefix;
+    __u128 session_id;
+};
 
 // must_loadbalance performs the following check:
 // - ethhdr bounds
@@ -37,6 +48,7 @@
 // - iphdr bounds
 // - iphdr->daddr == loadbalancer's IP addr
 // - iphdr->protocol == UDP
+// - udpdata bounds
 static __always_inline _Bool must_loadbalance(void *data, void *data_end,
                                               __u32 lb_addr, __u16 lb_port) {
     // -- Check ethhdr bounds
@@ -72,6 +84,16 @@ static __always_inline _Bool must_loadbalance(void *data, void *data_end,
     if (udph->dest != bpf_htons(lb_port)) {
         return 0;
     }
+
+    // -- Check udpdata
+    // The udp data is prefixed by a 4 byte pattern equal to [0x55, 0x55, 0x49,
+    // 0x44] followed by 16 bytes uuid.
+    struct udpdata *udpd = (struct udpdata *)(udph + 1);
+    if ((void *)(udpd + 1) > data_end)
+        return 0;
+
+    if (udpd->prefix != UDPLB_PACKET_PREFIX)
+        return 0;
 
     return 1;
 }
@@ -110,6 +132,9 @@ static __always_inline __u16 udphdr_csum(struct udphdr *udph) {
 // ---------------------------------------------------------------------------
 // -- FAST HASH
 // ---------------------------------------------------------------------------
+
+// computes the hash of x of size y and return its z modulo
+#define hash_modulo(x, y, z) fast_hash((const char *)x, sizeof(y)) % z
 
 // computes a fast hash
 // TODO: benchmark this func w/ other hash funcs.

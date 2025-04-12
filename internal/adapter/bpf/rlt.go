@@ -15,6 +15,8 @@
  */
 package bpfadapter
 
+import "github.com/alexandremahdhaoui/udplb/internal/types"
+
 type Prime uint64
 
 const (
@@ -22,6 +24,27 @@ const (
 	Prime4071  Prime = 4071  // Recommended if n_backends < 40
 	Prime65497 Prime = 65497 // Recommended if n_backends < 650
 )
+
+// Let p a Prime equal to the lookupTableLength.
+//   - Use backend uuid, split it by x, e.g. with x=4: 4 * __u32.
+//   - mod[i] = uint32(uuid[i*32, (i+1)*32]) % p. i in [0,x]
+//   - coordinates = [mod[0], mod[1], ... mod[x]]
+//
+// Now we compute the lookup table in reverse. From the user POV.
+//   - Make a list of y prime numbers in the range of [x, p] in descending order.
+//   - For each primes compute "mod[i][y]" where we replace p with
+//     the prime at index y.
+//   - For each backend set the index mod[i][y] in the lookup table
+//     to this backend.
+//     => Also: y(n) > 2 * y(n+1). Or it could just be p/2???
+//   - This allows us to fill all lookup table entries which index is a multiple
+//     of the mod[i][y].
+//
+// Do this iteratively, until the lookup table is full.
+// When y = y_list[len(y) - 1] then the lookup table is guaranted to be full.
+func ReverseCoordinatesLookupTable() {
+	panic("unimplemented")
+}
 
 // Populates a lookup table using a determistic robust algorithm.
 //
@@ -41,7 +64,10 @@ const (
 // in the same shard.
 // What about collisions? Well we just need to pick a sufficiently large number of
 // shards.
-func ShardedLookupTable(availableBackends []Backend, lookupTableLength Prime) ([]int, []string) {
+func ShardedLookupTable(
+	availableBackends []types.Backend,
+	lookupTableLength Prime,
+) ([]int, []string) {
 	panic("unimplemented")
 }
 
@@ -64,7 +90,7 @@ var fib = []uint64{1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987
 // - Initializing each Bi such that: lup[Hi] = Bi.Id
 // - Using the NaiveFib algorithm to set the next available entry in the map.
 func RobustFibLookupTable(
-	availableBackends []*Backend,
+	availableBackends []*types.Backend,
 	lookupTableLength Prime,
 ) (keys []uint64, values []string) {
 	// let n the number of available backends.
@@ -161,7 +187,7 @@ exitLoop:
 }
 
 func RobustSimpleLookupTable(
-	availableBackends []*Backend,
+	availableBackends []*types.Backend,
 	lookupTableLength Prime,
 ) (keys []uint64, values []string) {
 	// let n the number of available backends.
@@ -263,7 +289,7 @@ func RobustSimpleLookupTable(
 // TODO: Implement the maglev lookup table algo instead.
 // TODO: we must lock the lookup table while the table is being updated.
 func NaiveFibLookupTable(
-	availableBackends []*Backend,
+	availableBackends []*types.Backend,
 	lookupTableLength Prime,
 ) (keys []uint64, values []string) {
 	// TODO: improve this to make less disruption when a backend is down or a new
@@ -337,7 +363,7 @@ func NaiveFibLookupTable(
 }
 
 func SimpleLookupTable(
-	availableBackends []*Backend,
+	availableBackends []*types.Backend,
 	lookupTableLength Prime,
 ) (keys []uint64, values []string) {
 	m := uint64(lookupTableLength)

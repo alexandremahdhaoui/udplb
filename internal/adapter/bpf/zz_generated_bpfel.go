@@ -12,12 +12,24 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type udplbBackendSpec struct {
-	Ip      uint32
-	Port    uint16
-	Mac     [6]uint8
-	Enabled bool
-	_       [3]byte
+type udplbAssignmentT struct {
+	SessionId [16]byte /* uint128 */
+	BackendId [16]byte /* uint128 */
+}
+
+type udplbBackendSpecT struct {
+	Id   [16]byte /* uint128 */
+	Ip   uint32
+	Port uint16
+	Mac  [6]uint8
+	_    [4]byte
+}
+
+type udplbConfigT struct {
+	Ip              uint32
+	Port            uint16
+	_               [2]byte
+	LookupTableSize uint32
 }
 
 // loadUdplb returns the embedded CollectionSpec for udplb.
@@ -69,16 +81,27 @@ type udplbProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type udplbMapSpecs struct {
-	Backends *ebpf.MapSpec `ebpf:"backends"`
+	AssignmentRingbuf *ebpf.MapSpec `ebpf:"assignment_ringbuf"`
+	BackendListA      *ebpf.MapSpec `ebpf:"backend_list_a"`
+	BackendListB      *ebpf.MapSpec `ebpf:"backend_list_b"`
+	LookupTableA      *ebpf.MapSpec `ebpf:"lookup_table_a"`
+	LookupTableB      *ebpf.MapSpec `ebpf:"lookup_table_b"`
+	SessionMapA       *ebpf.MapSpec `ebpf:"session_map_a"`
+	SessionMapB       *ebpf.MapSpec `ebpf:"session_map_b"`
 }
 
 // udplbVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type udplbVariableSpecs struct {
-	UDPLB_IP   *ebpf.VariableSpec `ebpf:"UDPLB_IP"`
-	UDPLB_PORT *ebpf.VariableSpec `ebpf:"UDPLB_PORT"`
-	N_backends *ebpf.VariableSpec `ebpf:"n_backends"`
+	ActivePointer    *ebpf.VariableSpec `ebpf:"active_pointer"`
+	BackendListA_len *ebpf.VariableSpec `ebpf:"backend_list_a_len"`
+	BackendListB_len *ebpf.VariableSpec `ebpf:"backend_list_b_len"`
+	Config           *ebpf.VariableSpec `ebpf:"config"`
+	LookupTableA_len *ebpf.VariableSpec `ebpf:"lookup_table_a_len"`
+	LookupTableB_len *ebpf.VariableSpec `ebpf:"lookup_table_b_len"`
+	SessionMapA_len  *ebpf.VariableSpec `ebpf:"session_map_a_len"`
+	SessionMapB_len  *ebpf.VariableSpec `ebpf:"session_map_b_len"`
 }
 
 // udplbObjects contains all objects after they have been loaded into the kernel.
@@ -101,12 +124,24 @@ func (o *udplbObjects) Close() error {
 //
 // It can be passed to loadUdplbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type udplbMaps struct {
-	Backends *ebpf.Map `ebpf:"backends"`
+	AssignmentRingbuf *ebpf.Map `ebpf:"assignment_ringbuf"`
+	BackendListA      *ebpf.Map `ebpf:"backend_list_a"`
+	BackendListB      *ebpf.Map `ebpf:"backend_list_b"`
+	LookupTableA      *ebpf.Map `ebpf:"lookup_table_a"`
+	LookupTableB      *ebpf.Map `ebpf:"lookup_table_b"`
+	SessionMapA       *ebpf.Map `ebpf:"session_map_a"`
+	SessionMapB       *ebpf.Map `ebpf:"session_map_b"`
 }
 
 func (m *udplbMaps) Close() error {
 	return _UdplbClose(
-		m.Backends,
+		m.AssignmentRingbuf,
+		m.BackendListA,
+		m.BackendListB,
+		m.LookupTableA,
+		m.LookupTableB,
+		m.SessionMapA,
+		m.SessionMapB,
 	)
 }
 
@@ -114,9 +149,14 @@ func (m *udplbMaps) Close() error {
 //
 // It can be passed to loadUdplbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type udplbVariables struct {
-	UDPLB_IP   *ebpf.Variable `ebpf:"UDPLB_IP"`
-	UDPLB_PORT *ebpf.Variable `ebpf:"UDPLB_PORT"`
-	N_backends *ebpf.Variable `ebpf:"n_backends"`
+	ActivePointer    *ebpf.Variable `ebpf:"active_pointer"`
+	BackendListA_len *ebpf.Variable `ebpf:"backend_list_a_len"`
+	BackendListB_len *ebpf.Variable `ebpf:"backend_list_b_len"`
+	Config           *ebpf.Variable `ebpf:"config"`
+	LookupTableA_len *ebpf.Variable `ebpf:"lookup_table_a_len"`
+	LookupTableB_len *ebpf.Variable `ebpf:"lookup_table_b_len"`
+	SessionMapA_len  *ebpf.Variable `ebpf:"session_map_a_len"`
+	SessionMapB_len  *ebpf.Variable `ebpf:"session_map_b_len"`
 }
 
 // udplbPrograms contains all programs after they have been loaded into the kernel.

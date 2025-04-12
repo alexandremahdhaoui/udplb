@@ -26,7 +26,7 @@ import (
 // -- CONFIG
 // -------------------------------------------------------------------
 
-type BackendSpec struct {
+type BackendConfig struct {
 	Enabled bool   `json:"enabled"`
 	IP      string `json:"ip"`
 	MAC     string `json:"mac"`
@@ -38,7 +38,7 @@ type Config struct {
 	IP     string `json:"ip"`
 	Port   uint16 `json:"port"`
 
-	Backends []BackendSpec `json:"backends"`
+	Backends []BackendConfig `json:"backends"`
 }
 
 // -------------------------------------------------------------------

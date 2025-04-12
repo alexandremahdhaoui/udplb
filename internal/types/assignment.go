@@ -13,31 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package bpfadapter
+package types
 
-import (
-	"context"
+import "github.com/google/uuid"
 
-	"github.com/google/uuid"
-)
-
-type (
-	MappedSessions = map[uuid.UUID]uuid.UUID
-
-	SessionBackendMapping struct {
-		SessionId uuid.UUID
-		BackendId uuid.UUID
-
-		MarkedForDeletion bool
-	}
-)
-
-// SetMappedSessions implements UDPLB.
-func (lb *udplb) SetMappedSessions(ctx context.Context, m MappedSessions) error {
-	panic("unimplemented")
-}
-
-// SetSessionBackendMapping implements UDPLB.
-func (lb *udplb) SetSessionBackendMapping(ctx context.Context, item SessionBackendMapping) error {
-	panic("unimplemented")
+type Assignment struct {
+	BackendId uuid.UUID
+	SessionId uuid.UUID
 }

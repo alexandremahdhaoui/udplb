@@ -1,8 +1,24 @@
+/*
+ * Copyright 2025 Alexandre Mahdhaoui
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package util
 
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"net"
 
 	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
@@ -13,13 +29,17 @@ import (
 // -------------------------------------------------------------------
 
 // TODO: add support for ipv6
-func ParseIPToUint32(s string) (uint32, error) {
+func ParseIPV4ToUint32(s string) (uint32, error) {
 	ipv4 := net.ParseIP(s).To4()
 	if ipv4 == nil {
 		return 0, errors.New("IP must be ipv4")
 	}
 
 	return binary.NativeEndian.Uint32(ipv4), nil
+}
+
+func NetIPv4ToUint32(ip net.IP) uint32 {
+	return binary.NativeEndian.Uint32(ip.To4())
 }
 
 var errParseIEEE802MAC = errors.New(
@@ -48,4 +68,17 @@ func ParseIEEE802MAC(s string) ([6]uint8, error) {
 		mac[4],
 		mac[5],
 	}, nil
+}
+
+// -------------------------------------------------------------------
+// -- ValidateUint16Port
+// -------------------------------------------------------------------
+
+var ErrInvalidUDPLBPort = errors.New("udplb port is invalid")
+
+func ValidateUint16Port(port int) error {
+	if port < 1000 || port > math.MaxUint16 {
+		return ErrInvalidUDPLBPort
+	}
+	return nil
 }
