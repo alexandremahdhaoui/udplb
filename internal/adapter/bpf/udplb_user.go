@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 
 	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
@@ -33,24 +34,15 @@ import (
 )
 
 // -------------------------------------------------------------------
-// -- UDPLB (Interface)
+// -- runnable (concrete implementation)
 // -------------------------------------------------------------------
 
-type UDPLB interface {
-	types.DoneCloser
-
-	// Run udplb bpf program.
-	Run(ctx context.Context) error
-
-	// Logs bpf traces to stdout.
-	TraceBPF() error
-}
-
-// -------------------------------------------------------------------
-// -- udplb (concrete implementation)
-// -------------------------------------------------------------------
-
-type udplb struct {
+// runnable is thread-safe and can be gracefully shut down.
+//
+// On Close() it will:
+// - Propagate Close to its dependencies: [bpfadapter.DataStructureManager].
+// - Close BPF objects
+type runnable struct {
 	// -- loadbalancer spec
 
 	// Name of the loadbalancer.
@@ -60,18 +52,16 @@ type udplb struct {
 	// Network interface the XDP program will attach to.
 	iface *net.Interface
 
-	// -- loadbalancer configuration.
-	udplbConfigT udplbConfigT
-
 	// -- bpf
 
 	objs *udplbObjects
 
 	// -- mgmt
 
-	running     bool
-	terminateCh chan struct{}
-	doneCh      chan struct{}
+	running            bool
+	doneCh             chan struct{}
+	propagateCloseFunc func() error
+	mu                 *sync.Mutex
 }
 
 // -------------------------------------------------------------------
@@ -80,46 +70,81 @@ type udplb struct {
 
 var ErrCannotCreateNewUDPLBAdapter = errors.New("cannot create new udplb adapter")
 
+// The function loads the bpf program into the kernel.
+//
+// The user obtains 2 data structures that achieve the separation of concern.
+// - One data structure can be used to run the bpf program.
+// - Another can be used to interact with the kernel data structure.
+//
+// To clarify:
+// - The user should not close the Objects data structure.
+// |-> Hence Objects must only implement and expose "Done()"
+//
+// OR: don't bother and run the program in the new func.
+// The function returns (types.DoneCloser, Objects, error) instead.
 func New(
 	name string,
 	id uuid.UUID,
 	iface *net.Interface,
 	ip net.IP,
 	port uint16,
-	lookupTableLength uint32,
-) (UDPLB, error) {
-	return &udplb{
-		name: name,
-		udplbConfigT: udplbConfigT{
-			Ip:              util.NetIPv4ToUint32(ip),
-			Port:            port,
-			LookupTableSize: lookupTableLength,
-		},
-		iface:       iface,
-		objs:        new(udplbObjects),
-		running:     false,
-		terminateCh: make(chan struct{}),
-		doneCh:      make(chan struct{}),
-	}, nil
-}
-
-// Close implements UDPLB.
-func (lb *udplb) Close() error {
-	if !lb.running {
-		return flaterrors.Join(ErrCannotTerminateDSManagerIfNotStarted, ErrClosingDSManager)
+	lookupTableSize uint32,
+) (types.Runnable, DataStructureManager, error) {
+	if err := rlimit.RemoveMemlock(); err != nil {
+		return nil, nil, flaterrors.Join(err, ErrRemovingMemlock, ErrCreatingNewBPFProgram)
 	}
 
-	// Triggers termination of the event loop
-	close(lb.terminateCh)
-	// Await graceful termination
-	<-lb.doneCh
+	cfg := udplbConfigT{
+		Ip:              util.NetIPv4ToUint32(ip),
+		Port:            port,
+		LookupTableSize: lookupTableSize,
+	}
 
-	return nil
-}
+	// -- load bpf program
+	spec, err := loadUdplb()
+	if err != nil {
+		return nil, nil, flaterrors.Join(err, ErrCreatingNewBPFProgram)
+	}
 
-// Done implements UDPLB.
-func (lb *udplb) Done() <-chan struct{} {
-	return lb.doneCh
+	// -- set config
+	if err = spec.Variables["config"].Set(cfg); err != nil {
+		return nil, nil, flaterrors.Join(err, ErrCreatingNewBPFProgram)
+	}
+
+	// -- Load ebpf elf into kernel
+	bpfObjects := new(udplbObjects)
+	if err = spec.LoadAndAssign(bpfObjects, nil); err != nil {
+		return nil, nil, flaterrors.Join(err, ErrCreatingNewBPFProgram)
+	}
+
+	// -- init done channel
+	doneCh := make(chan struct{})
+	// -- init objects
+	objs, err := newObjects(bpfObjects, doneCh)
+	if err != nil {
+		return nil, nil, flaterrors.Join(err, ErrCreatingNewBPFProgram)
+	}
+
+	// -- init manager
+	manager, err := NewDataStructureManager(name, objs)
+	if err != nil {
+		return nil, nil, flaterrors.Join(err, ErrCreatingNewBPFProgram)
+	}
+
+	propagateTerminationFunc := func() error {
+		return manager.Close()
+	}
+
+	return &runnable{
+		name:               name,
+		id:                 id,
+		iface:              iface,
+		objs:               bpfObjects,
+		running:            false,
+		doneCh:             doneCh,
+		propagateCloseFunc: propagateTerminationFunc,
+		mu:                 &sync.Mutex{},
+	}, manager, nil
 }
 
 // -------------------------------------------------------------------
@@ -128,55 +153,31 @@ func (lb *udplb) Done() <-chan struct{} {
 
 var (
 	ErrRemovingMemlock             = errors.New("removing memlock")
+	ErrCreatingNewBPFProgram       = errors.New("creating new bpf program")
 	ErrRunningUdplbUserlandProgram = errors.New("running udplb userland program")
 )
 
-func (lb *udplb) Run(ctx context.Context) error {
-	// Remove resource limits for kernels <5.11.
-	if err := rlimit.RemoveMemlock(); err != nil {
-		return flaterrors.Join(err, ErrRemovingMemlock, ErrRunningUdplbUserlandProgram)
+// Run implements types.Runnable.
+func (r *runnable) Run(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.running {
+		return nil // return nil to make Run idempotent.
 	}
-
-	// -- Init constants
-
-	spec, err := loadUdplb()
-	if err != nil {
-		slog.Error(err.Error())
-		os.Exit(1)
-	}
-
-	if err := spec.Variables["config"].Set(lb.udplbConfigT); err != nil {
-		return flaterrors.Join(err, ErrRunningUdplbUserlandProgram)
-	}
-
-	// -- Load ebpf elf into kernel
-
-	if err = spec.LoadAndAssign(lb.objs, nil); err != nil {
-		return flaterrors.Join(err, ErrRunningUdplbUserlandProgram)
-	}
-
-	defer lb.objs.Close()
 
 	// -- Attach udplb to iface
 
 	link, err := link.AttachXDP(link.XDPOptions{
-		Program:   lb.objs.Udplb,
-		Interface: lb.iface.Index,
+		Program:   r.objs.Udplb,
+		Interface: r.iface.Index,
 	})
 	if err != nil {
 		return flaterrors.Join(err, ErrRunningUdplbUserlandProgram)
 	}
+	defer link.Close()
 
-	lb.running = true
-	slog.InfoContext(ctx, "XDP program loaded successfully", "ifname", lb.iface.Name)
-
-	// TODO: receive updates of the new session assignment in order to propagate them
-	// to other loadbalancers.
-
-	<-lb.terminateCh
-	_ = lb.objs.Close()
-	_ = link.Close()
-	close(lb.doneCh)
+	r.running = true
+	slog.InfoContext(ctx, "XDP program loaded successfully", "ifname", r.iface.Name)
 
 	return nil
 }
@@ -185,8 +186,7 @@ func (lb *udplb) Run(ctx context.Context) error {
 // -- TraceBPF
 // -------------------------------------------------------------------
 
-// TraceBPF implements UDPLB.
-func (lb *udplb) TraceBPF() error {
+func (r *runnable) TraceBPF() error {
 	// -- print bpf trace logs
 	fd, err := os.OpenFile("/sys/kernel/debug/tracing/trace_pipe", os.O_RDONLY, os.ModeAppend)
 	if err != nil {
@@ -203,4 +203,35 @@ func (lb *udplb) TraceBPF() error {
 	}()
 
 	return nil
+}
+
+// -------------------------------------------------------------------
+// -- DoneCloser
+// -------------------------------------------------------------------
+
+// Close implements types.Runnable.
+func (r *runnable) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.running {
+		return nil
+	}
+
+	var errs error
+	for _, f := range []func() error{
+		r.propagateCloseFunc,
+		r.objs.Close,
+	} {
+		if err := f(); err != nil {
+			errs = flaterrors.Join(errs, err)
+		}
+	}
+	close(r.doneCh)
+
+	return errs
+}
+
+// Done implements types.Runnable.
+func (r *runnable) Done() <-chan struct{} {
+	return r.doneCh
 }

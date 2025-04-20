@@ -15,6 +15,10 @@
  */
 package types
 
+import (
+	"context"
+)
+
 // DoneCloser wraps the Close and Done methods. This methods respectively
 // signal the interface to terminate its execution gracefully, and returns
 // a channel that's closed when work done on behalf of this interface has
@@ -23,11 +27,20 @@ package types
 // The behavior of Close after the first call MUST be ineffective.
 type DoneCloser interface {
 	// Close signal the interface to terminate its execution gracefully.
-	//
 	// The behavior of Close after the first call MUST be ineffective.
 	Close() error
 
 	// Done returns a channel that's closed when work done on behalf of this
-	// interface has been gracefully terminated
+	// interface has been gracefully terminated.
 	Done() <-chan struct{}
+}
+
+// Runnable can be run and gracefully shut down.
+type Runnable interface {
+	DoneCloser
+
+	// Run is not blocking.
+	// - Please use `<-Done()` to await until the Runnable is done.
+	// - Please use `Close()` to terminate the Runnable execution.
+	Run(ctx context.Context) error
 }

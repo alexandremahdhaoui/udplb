@@ -20,6 +20,8 @@ import "testing"
 // TODO: implement unit tests
 
 func TestDataStructureManager(t *testing.T) {
+	t.Run("Close", func(t *testing.T) {})
+	t.Run("Done", func(t *testing.T) {})
 	t.Run("AssignmentSubscribe", func(t *testing.T) {})
 	t.Run("SetObjects", func(t *testing.T) {})
 	t.Run("SessionBatchUpdate", func(t *testing.T) {})

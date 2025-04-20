@@ -1,5 +1,5 @@
-github.com/alexandremahdhaoui/ebpfstruct v0.1.0 h1:e3eJSddHoXB0/K1clyoeHab5qsUipgU0zNO/0WnSyMY=
-github.com/alexandremahdhaoui/ebpfstruct v0.1.0/go.mod h1:1ZvxEf8Q4sY42s/e8bZh2A04gqHSb2yG9Bf6IiJ2dyY=
+github.com/alexandremahdhaoui/ebpfstruct v0.2.0 h1:SyBNPxKq0CuPg5Bj1OVu/U4wmvwYRc1umD7fF8PwJwE=
+github.com/alexandremahdhaoui/ebpfstruct v0.2.0/go.mod h1:1ZvxEf8Q4sY42s/e8bZh2A04gqHSb2yG9Bf6IiJ2dyY=
 github.com/alexandremahdhaoui/tooling v0.1.4 h1:9M6iC9Y0B+x3n2dUUPpIqIblonMTcC0TYj0FzbwLWMs=
 github.com/alexandremahdhaoui/tooling v0.1.4/go.mod h1:GEUwT0QqKs0xxZxXa+kvwwLrfsNgy7GBpckJTCUvrug=
 github.com/cilium/ebpf v0.18.0 h1:OsSwqS4y+gQHxaKgg2U/+Fev834kdnsQbtzRnbVC6Gs=
