@@ -21,23 +21,3 @@ package vmagentv1alpha1;
 import "pkg/apis/common/v1alpha1/common.proto";
 
 option go_package = "github.com/alexandremahdhaoui/udplb/pkg/apis/vmagent/v1alpha1;vmagentv1alpha1";
-
-// -----------------------------------------------------
-// -- EVENT
-// -----------------------------------------------------
-
-message Event {
-    string sessionId = 1; // uuid
-
-    string subjectId = 2; // uuid
-    string verb = 3;
-    string objectId = 4; // uuid
-}
-
-// -----------------------------------------------------
-// -- EVENT STREAMER
-// -----------------------------------------------------
-
-// -----------------------------------------------------
-// -- EVENT SUBSCRIBER
-// -----------------------------------------------------

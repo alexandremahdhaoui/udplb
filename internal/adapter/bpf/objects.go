@@ -16,10 +16,6 @@
 package bpfadapter
 
 import (
-	"errors"
-
-	"github.com/alexandremahdhaoui/udplb/internal/types"
-
 	"github.com/alexandremahdhaoui/ebpfstruct"
 	"github.com/google/uuid"
 )
@@ -28,9 +24,12 @@ import (
 // -- OBJECTS
 // -------------------------------------------------------------------
 
-var _ types.DoneCloser = Objects{}
+type (
+	BackendSpec = udplbBackendSpecT
+	Assignment  = udplbAssignmentT
+)
 
-// Wraps the following ebpf objects with a convenient interface for testing.
+// Wraps the following ebpf Objects with a convenient interface for testing.
 //
 // Objects implements DoneCloser.
 //   - Close will propagate to all internal data structures. It will also close the
@@ -42,7 +41,7 @@ type Objects struct {
 	// NB:
 	// - n is defined as the number of available backends.
 	// - n' is defined as the number of backends, e.g. in StateAvailable, StateUnschedulable...
-	BackendList ebpfstruct.Array[*udplbBackendSpecT]
+	BackendList ebpfstruct.Array[*BackendSpec]
 
 	// LookupTable is a BPFArray of uint32 and of size m.
 	// The integers stored in this list represents the index of an available backend in the
@@ -64,7 +63,7 @@ type Objects struct {
 	// The userland program MUST update its internal session map in order to avoid
 	// overwritting these newly discovered assignment when setting and switching over
 	// the SessionMap bpf data structure.
-	AssignmentFIFO ebpfstruct.FIFO[udplbAssignmentT]
+	AssignmentFIFO ebpfstruct.FIFO[Assignment]
 
 	// SessionMap maps a session id to a specific backend, if the backend transitions from
 	// StateAvailable to StateUnschedulable, existing packet destinated to an existing session
@@ -81,23 +80,17 @@ type Objects struct {
 	SessionMap ebpfstruct.Map[uuid.UUID, uint32]
 }
 
-var ErrCannotCreateObjectsFromUnknownUDPLBImplementation = errors.New(
-	"cannot create object from unknown udplb implementation",
-)
-
-func NewObjects(prog UDPLB) (Objects, error) {
-	concrete, ok := prog.(*udplb)
-	if !ok {
-		return Objects{}, ErrCannotCreateObjectsFromUnknownUDPLBImplementation
-	}
-	objs := concrete.objs
-
+// The doneCh must signals as soon as possible that the ebpf data structures are not
+// available anymore, either because they are closed or the bpf program
+// is closed.
+func newObjects(objs *udplbObjects, doneCh <-chan struct{}) (Objects, error) {
 	backendList, err := ebpfstruct.NewArray[*udplbBackendSpecT](
 		objs.BackendListA,
 		objs.BackendListB,
 		objs.BackendListA_len,
 		objs.BackendListB_len,
 		objs.ActivePointer,
+		doneCh,
 	)
 	if err != nil {
 		return Objects{}, err
@@ -109,6 +102,7 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		objs.LookupTableA_len,
 		objs.LookupTableB_len,
 		objs.ActivePointer,
+		doneCh,
 	)
 	if err != nil {
 		return Objects{}, err
@@ -120,12 +114,16 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		objs.SessionMapA_len,
 		objs.SessionMapB_len,
 		objs.ActivePointer,
+		doneCh,
 	)
 	if err != nil {
 		return Objects{}, err
 	}
 
-	assignmentFIFO, err := ebpfstruct.NewFIFO[udplbAssignmentT](objs.AssignmentRingbuf)
+	assignmentFIFO, err := ebpfstruct.NewFIFO[udplbAssignmentT](
+		objs.AssignmentRingbuf,
+		doneCh,
+	)
 	if err != nil {
 		return Objects{}, err
 	}
@@ -136,14 +134,4 @@ func NewObjects(prog UDPLB) (Objects, error) {
 		AssignmentFIFO: assignmentFIFO,
 		SessionMap:     sessionMap,
 	}, nil
-}
-
-// Close implements types.DoneCloser.
-func (o Objects) Close() error {
-	panic("unimplemented")
-}
-
-// Done implements types.DoneCloser.
-func (o Objects) Done() <-chan struct{} {
-	panic("unimplemented")
 }

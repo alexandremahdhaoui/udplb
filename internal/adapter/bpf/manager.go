@@ -17,6 +17,7 @@ package bpfadapter
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -27,10 +28,6 @@ import (
 
 var (
 	ErrClosingDSManager = errors.New("closing bpf.DataStructureManager")
-
-	ErrCannotTerminateDSManagerIfNotStarted = errors.New(
-		"bpf.DataStructureManager must be started once before termination",
-	)
 
 	ErrObjectsMustNotBeNil     = errors.New("object must not be nil")
 	ErrInvalidArguments        = errors.New("invalid arguments")
@@ -43,13 +40,14 @@ var (
 	ErrDSManagerIsShuttingDown = errors.New("dsManager is shutting down")
 )
 
-type Assignment = udplbAssignmentT
-
 // -------------------------------------------------------------------
 // -- DATA STRUCTURE MANAGER
 // -------------------------------------------------------------------
 
-// All method of DataStructureManager must be thread-safe
+// DataStructureManager is thread-safe and can be gracefully shut down.
+//
+// Please note that closing the DataStructureManager does not close the
+// underlying bpf data structures.
 type DataStructureManager interface {
 	types.DoneCloser
 
@@ -90,26 +88,26 @@ type DataStructureManager interface {
 // -------------------------------------------------------------------
 
 type dsManager struct {
-	name string
-	objs Objects
-
+	name    string
+	objs    Objects
 	eventCh chan *event
 
+	// -- mgmt
 	running     bool
 	doneCh      chan struct{}
 	terminateCh chan struct{}
+	mu          *sync.Mutex
 }
 
 func NewDataStructureManager(name string, objs Objects) (DataStructureManager, error) {
 	mgr := &dsManager{
-		name: name,
-		objs: objs,
-
-		eventCh: make(chan *event),
-
+		name:        name,
+		objs:        objs,
+		eventCh:     make(chan *event),
 		running:     false,
 		doneCh:      make(chan struct{}),
 		terminateCh: make(chan struct{}),
+		mu:          &sync.Mutex{},
 	}
 
 	go mgr.eventLoop()
@@ -140,6 +138,10 @@ type eventObjects struct {
 	SessionMap  map[uuid.UUID]uint32
 }
 
+// TODO: refactor event using a closure rather than pseudo typed events.
+// - remove kind.
+// - remove set, sessionBatch{Update,Delete}.
+// - add closure f func() error
 type event struct {
 	kind  eventKind
 	errCh chan error
@@ -401,6 +403,8 @@ func transformBackendList(in []types.Backend) (out []*udplbBackendSpecT) {
 // Close always returns nil.
 // TODO: force closing by using timeout?
 func (mgr *dsManager) Close() error {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
 	if !mgr.running {
 		return nil
 	}
@@ -420,22 +424,4 @@ func (mgr *dsManager) Close() error {
 // Done implements DataStructureManager.
 func (mgr *dsManager) Done() <-chan struct{} {
 	return mgr.doneCh
-}
-
-// -------------------------------------------------------------------
-// -- HELPERS
-// -------------------------------------------------------------------
-
-const maxRetries = 3
-
-var ErrExceededMaxRetries = errors.New("exceeded maximum retries")
-
-func retry(f func() error) error {
-	var errs error
-	for range maxRetries {
-		if err := f(); err != nil {
-			errs = flaterrors.Join(err, errs)
-		}
-	}
-	return flaterrors.Join(ErrExceededMaxRetries, errs)
 }

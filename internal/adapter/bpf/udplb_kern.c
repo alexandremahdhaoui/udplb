@@ -106,10 +106,12 @@ volatile __u32 backend_list_a_len;
 volatile __u32 backend_list_b_len;
 
 static __always_inline backend_list_t *get_active_backend_list() {
-    if (active_pointer) {
+    switch (active_pointer) {
+    case 0:
         return &backend_list_a;
+    default:
+        return &backend_list_b;
     }
-    return &backend_list_b;
 }
 
 /*******************************************************************************
