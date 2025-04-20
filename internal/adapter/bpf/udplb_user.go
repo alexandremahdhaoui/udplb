@@ -198,7 +198,7 @@ func (r *runnable) TraceBPF() error {
 		scanner := bufio.NewScanner(fd)
 		scanner.Split(bufio.ScanLines)
 		for scanner.Scan() {
-			fmt.Fprintf(os.Stdout, "%s\n", scanner.Text())
+			_, _ = fmt.Fprintf(os.Stdout, "%s\n", scanner.Text())
 		}
 	}()
 

@@ -36,7 +36,7 @@ trap __on_failure_go EXIT
 
 GO_FILES="$(find . -name '*.go' ! -name 'zz_generated_*')"
 LICENSED_FILES="$(echo "${GO_FILES}" |
-    xargs grep 'Copyright.*Alexandre Mahdhaoui' |
+    xargs grep -m1 'Copyright.*Alexandre Mahdhaoui' |
     sed 's/.go:.*/.go/')"
 
 [[ "${GO_FILES}" == "${LICENSED_FILES}" ]]
@@ -50,7 +50,7 @@ trap __on_failure_c EXIT
 
 C_FILES="$(find . -name '*.c' -o -name '*.h')"
 LICENSED_FILES="$(echo "${C_FILES}" |
-    xargs grep -H 'Copyright.*Alexandre Mahdhaoui' |
+    xargs grep -m1 -H 'Copyright.*Alexandre Mahdhaoui' |
     sed 's/\(\.c\|\.h\):.*/\1/')"
 
 [[ "${C_FILES}" == "${LICENSED_FILES}" ]]

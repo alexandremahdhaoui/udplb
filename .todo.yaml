@@ -1,0 +1,7 @@
+---
+TODOs:
+  - Fix RLT algorithm.
+  - Fix RLT algorithm tests.
+  - Implement radix-like RLT algorithm.
+  - Move RLT to its own adapter/package.
+  - Document the different kinds of notification pathways b/w loadbalancer. I.e. the fast "autocrine/paracrine" UDP pathway, and the slower but regulated "endocrine" WAL-based pathway.
