@@ -1,3 +1,5 @@
+//go:build benchmark
+
 /*
  * Copyright 2025 Alexandre Mahdhaoui
  *
@@ -17,78 +19,66 @@ package rltadapter_test
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"slices"
 	"testing"
 
-	bpfadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/bpf"
+	rltadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/rlt"
+	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/google/uuid"
 )
 
 type (
-	LookupTableFunc func(availableBackends []*bpfadapter.Backend, lookupTableLength bpfadapter.Prime) (keys []uint64, values []string)
-	Scenario        struct {
-		nBefore uint64
-		nAfter  uint64
+	LookupTableFunc func(
+		availableBackends []*types.Backend,
+		lookupTableLength uint32,
+	) []uint32
+
+	Scenario struct {
+		nBefore uint32
+		nAfter  uint32
 	}
 )
 
 // go test -v -cpu=`nproc` -bench=. --benchmem --benchtime=1s -count=40 --timeout=180m ./internal/adapter/bpf/ebpf_lookuptable_test.go  | tee .ignore.benchmark
 func BenchmarkLookupTable(b *testing.B) {
 	var (
-		beCount uint64           // number of available backends
-		lupLen  bpfadapter.Prime // size of the
-
-		availableBackends []*bpfadapter.Backend
+		beCount           uint32 // number of available backends
+		availableBackends []*types.Backend
 	)
 
 	setup := func(b *testing.B) {
 		b.Helper()
 
-		availableBackends = make([]*bpfadapter.Backend, beCount)
+		availableBackends = make([]*types.Backend, beCount)
 		for i := range beCount {
-			availableBackends[i] = bpfadapter.NewBackend(
+			availableBackends[i] = types.NewBackend(
 				uuid.New(),
-				bpfadapter.BackendSpec{},
-				bpfadapter.BackendStatus{},
-				false,
+				types.BackendSpec{},
+				types.BackendStatus{},
 			)
 		}
 	}
 
 	funcs := map[string]LookupTableFunc{
-		"NaiveSimple":  bpfadapter.SimpleLookupTable,
-		"NaiveFib":     bpfadapter.NaiveFibLookupTable,
-		"RobustFib":    bpfadapter.RobustFibLookupTable,
-		"RobustSimple": bpfadapter.RobustSimpleLookupTable,
+		"NaiveSimple":  rltadapter.SimpleLookupTable,
+		"NaiveFib":     rltadapter.NaiveFibLookupTable,
+		"RobustFib":    rltadapter.RobustFibLookupTable,
+		"RobustSimple": rltadapter.RobustSimpleLookupTable,
+		"RevCoord":     rltadapter.ReverseCoordinatesLookupTable,
 	}
 
-	primes := []bpfadapter.Prime{
-		bpfadapter.Prime(23),
-		bpfadapter.Prime(47),
-		bpfadapter.Prime307,
-		bpfadapter.Prime4071,
-		bpfadapter.Prime65497,
-	}
+	primes := []uint32{13, 23, 47, 307}
 
 	scenarios := []Scenario{
-		// Lost one replica.
 		{nBefore: 3, nAfter: 2},
-		// Scaled up: add 2 new replicas.
 		{nBefore: 3, nAfter: 5},
 
-		// Lost one replica.
 		{nBefore: 7, nAfter: 6},
-		// Scaled up: add 2 new replicas.
 		{nBefore: 7, nAfter: 9},
 
-		// Lost 3 replicas
-		{nBefore: 29, nAfter: 26},
-		// Scaled up: add 6 new replicas
-		{nBefore: 29, nAfter: 35},
-
-		// Lost 5 replicas
-		{nBefore: 255, nAfter: 250},
-		// Scaled up: add 10 new replicas
-		{nBefore: 255, nAfter: 299},
+		{nBefore: 27, nAfter: 25},
+		{nBefore: 27, nAfter: 30},
 	}
 
 	for fName, f := range funcs {
@@ -98,42 +88,59 @@ func BenchmarkLookupTable(b *testing.B) {
 			name := fmt.Sprintf("%s/prime=%d", name, p)
 
 			for _, sc := range scenarios {
-				if uint64(p) < sc.nBefore || uint64(p) < sc.nAfter {
+				if p < sc.nBefore || p < sc.nAfter {
 					// skip benchmarking if the number of backend is bigger than the lookup table length.
 					continue
 				}
 
 				name := fmt.Sprintf("%s/nBefore=%d/nAfter=%d", name, sc.nBefore, sc.nAfter)
 				b.Run(name, func(b *testing.B) {
-					lupLen = p
-					beCount = sc.nBefore
-					if sc.nBefore < sc.nAfter {
-						beCount = sc.nAfter
-					}
+					beCount = max(sc.nBefore, sc.nAfter)
 
 					b.ResetTimer()
 					for b.Loop() {
 						setup(b)
 
-						backends := availableBackends[0:sc.nBefore]
-						_, before := f(backends, lupLen)
-
-						backends = availableBackends[0:sc.nAfter]
-						_, after := f(backends, lupLen)
+						before := f(nChooseK(b, sc.nBefore, availableBackends), p)
+						after := f(nChooseK(b, sc.nAfter, availableBackends), p)
 
 						// Calculate rate of unchanged entries.
 						idem := 0
-						for i := range lupLen {
+						for i := range p {
 							if before[i] == after[i] {
 								idem++
 							}
 						}
 
-						unchangedEntries := float64(idem) / float64(lupLen)
+						unchangedEntries := float64(idem) / float64(p)
 						b.ReportMetric(100*unchangedEntries, "%unchangedEntries/op")
 					}
 				})
 			}
 		}
 	}
+}
+
+func nChooseK(b *testing.B, k uint32, sl []*types.Backend) []*types.Backend {
+	b.Helper()
+
+	out := make([]*types.Backend, k)
+	perm := rand.Perm(len(sl))
+	for i := range k {
+		out[i] = sl[perm[i]]
+	}
+
+	slices.SortFunc(out, func(a, b *types.Backend) int {
+		astr, bstr := a.Id.String(), b.Id.String()
+		switch {
+		case astr > bstr:
+			return 1
+		case astr < bstr:
+			return -1
+		default:
+			return 0
+		}
+	})
+
+	return out
 }

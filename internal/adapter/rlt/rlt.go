@@ -15,15 +15,55 @@
  */
 package rltadapter
 
-import "github.com/alexandremahdhaoui/udplb/internal/types"
+import (
+	"github.com/alexandremahdhaoui/udplb/internal/types"
+)
 
-type Prime uint64
+type Prime uint32
 
 const (
 	Prime307   Prime = 307   // Recommended if n_backends < 3
 	Prime4071  Prime = 4071  // Recommended if n_backends < 40
 	Prime65497 Prime = 65497 // Recommended if n_backends < 650
 )
+
+var (
+	primes = []uint32{
+		2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71,
+		73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173,
+		179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281,
+		283, 293, 307, 311, 313, 317, 331, 337, 347, 349, 353, 359, 367, 373, 379, 383, 389, 397, 401, 409,
+		419, 421, 431, 433, 439, 443, 449, 457, 461, 463, 467, 479, 487, 491, 499, 503, 509, 521, 523, 541,
+		547, 557, 563, 569, 571, 577, 587, 593, 599, 601, 607, 613, 617, 619, 631, 641, 643, 647, 653, 659,
+		661, 673, 677, 683, 691, 701, 709, 719, 727, 733, 739, 743, 751, 757, 761, 769, 773, 787, 797, 809,
+		811, 821, 823, 827, 829, 839, 853, 857, 859, 863, 877, 881, 883, 887, 907, 911, 919, 929, 937, 941,
+		947, 953, 967, 971, 977, 983, 991, 997, 1009, 1013, 1019, 1021, 1031, 1033, 1039, 1049, 1051, 1061,
+	}
+
+	fib = []uint32{
+		1,
+		1,
+		2,
+		3,
+		5,
+		8,
+		13,
+		21,
+		34,
+		55,
+		89,
+		144,
+		233,
+		377,
+		610,
+		987,
+		1587,
+		2584,
+		4181,
+	}
+)
+
+const nCoordinates = 8
 
 // Let p a Prime equal to the lookupTableLength.
 //   - Use backend uuid, split it by x, e.g. with x=4: 4 * __u32.
@@ -42,8 +82,96 @@ const (
 //
 // Do this iteratively, until the lookup table is full.
 // When y = y_list[len(y) - 1] then the lookup table is guaranted to be full.
-func ReverseCoordinatesLookupTable() {
-	panic("unimplemented")
+//
+// Test shows that ReverseCoordinatesLookupTable is resilient to backend failures.
+// It is less performant on scale up.
+func ReverseCoordinatesLookupTable(
+	availableBackends []*types.Backend,
+	// let m the length of the lookup table
+	m uint32,
+) []uint32 {
+	// let `out` the lookup table of length m.
+	out := make([]uint32, m)
+	// let n the number of available backends.
+	n := uint32(len(availableBackends))
+
+	unset := make(map[uint32]struct{})
+	for i := range m {
+		unset[i] = struct{}{}
+	}
+
+	distribution := make(map[uint32]uint32, n)
+	for i := range n {
+		distribution[i] = m / n
+	}
+
+	coord := make([][nCoordinates]uint32, n)
+	for i, b := range availableBackends {
+		coord[i] = b.Coordinates()
+	}
+
+	prime := m // init prime as m.
+	shouldContinue := true
+	for shouldContinue {
+		// -- for each backend.
+		for i := range n {
+			// for each coordinate of the backend.
+			for j := range nCoordinates {
+				if distribution[i] < 1 {
+					continue
+				}
+
+				mod := coord[i][j] % prime
+				// -- for each multiple of that prime.
+				for k := range m / prime {
+					idx := (k + 1) * mod
+					if _, ok := unset[idx]; !ok {
+						continue
+					}
+
+					out[idx] = i
+					distribution[i] -= 1
+					delete(unset, idx)
+				}
+			}
+		}
+
+		// -- pick a next prime prime.
+		prime, shouldContinue = nextPrime(prime)
+		shouldContinue = shouldContinue && isNotFullyDistributed(distribution)
+	}
+
+	// -- fill remaining
+	var i uint32
+	for k := range unset {
+		if i > n-1 {
+			i = 0
+		}
+
+		out[k] = i
+		i++
+	}
+
+	return out
+}
+
+func nextPrime(current uint32) (uint32, bool) {
+	for i := range len(primes) {
+		j := (len(primes) - 1) - i
+		if primes[j] < (1 + 2*current/3) {
+			return primes[j], true
+		}
+	}
+	return 0, false
+}
+
+func isNotFullyDistributed(distribution map[uint32]uint32) bool {
+	for _, v := range distribution {
+		if v > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Populates a lookup table using a determistic robust algorithm.
@@ -66,12 +194,10 @@ func ReverseCoordinatesLookupTable() {
 // shards.
 func ShardedLookupTable(
 	availableBackends []types.Backend,
-	lookupTableLength Prime,
-) ([]int, []string) {
+	lookupTableLength uint32,
+) []uint32 {
 	panic("unimplemented")
 }
-
-var fib = []uint64{1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1587, 2584, 4181}
 
 // Populates a robust lookup table.
 //
@@ -91,39 +217,38 @@ var fib = []uint64{1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987
 // - Using the NaiveFib algorithm to set the next available entry in the map.
 func RobustFibLookupTable(
 	availableBackends []*types.Backend,
-	lookupTableLength Prime,
-) (keys []uint64, values []string) {
-	// let n the number of available backends.
-	n := uint64(len(availableBackends))
 	// let m the length of the lookup table
-	m := uint64(lookupTableLength)
+	m uint32,
+) []uint32 {
+	// let n the number of available backends.
+	n := uint32(len(availableBackends))
 	// let rem the remainder of m/n.
 	rem := m % n
 
 	// evenly distribute map.
-	distribution := make(map[uint64]uint64, n)
-	banned := make(map[uint64]struct{}, n)
+	distribution := make(map[uint32]uint32, n)
+	banned := make(map[uint32]struct{}, n)
 	for j := range n {
 		distribution[j] = m / n
 	}
 
 	// lookup table
-	lup := make(map[uint64]string, m)
+	lup := make(map[uint32]uint32, m)
 
 	// M[j] holds the latest index of B[j]
-	M := make([]uint64, n)
+	M := make([]uint32, n)
 	for j := range n {
-		mod := availableBackends[j].HashedId() % m
+		mod := availableBackends[j].Coordinates()[0] % m
 		M[j] = mod
 
 		// fill this entry.
-		lup[mod] = availableBackends[j].Id.String()
+		lup[mod] = j
 		distribution[j] -= 1
 	}
 
 	for i := range len(fib) {
 		for j := range n {
-			if uint64(len(banned)) == n {
+			if uint32(len(banned)) == n {
 				goto exitLoop
 			}
 
@@ -152,16 +277,20 @@ func RobustFibLookupTable(
 				}
 
 				M[j] = Mj
-				lup[Mj] = availableBackends[j].Id.String()
+				// -- Persist backend index in the lookup table.
+				// j being the index of the current backend with respect to the provided list.
+				lup[Mj] = j
 				distribution[j] -= 1
 			}
 		}
 	}
 
 exitLoop:
-	// fill reamining fields.
-	var i, j uint64
-	for i = 0; i < n; i++ {
+	// TODO: this operation could be faster by caching the list of non assigned
+	// keys.
+	// -- fill reamining fields.
+	var i, j uint32
+	for i = range n {
 		if j > rem-1 {
 			break
 		}
@@ -171,59 +300,54 @@ exitLoop:
 			continue
 		}
 
-		lup[i] = availableBackends[j].Id.String()
+		// -- Persist backend index in the lookup table.
+		lup[i] = j
 		j++
 	}
 
-	// make into outputformat.
-	keys = make([]uint64, m)
-	values = make([]string, m)
+	// -- output format.
+	out := make([]uint32, m)
 	for k, v := range lup {
-		keys[k] = k
-		values[k] = v
+		out[k] = v
 	}
 
-	return keys, values
+	return out
 }
 
 func RobustSimpleLookupTable(
 	availableBackends []*types.Backend,
-	lookupTableLength Prime,
-) (keys []uint64, values []string) {
+	lookupTableLength uint32,
+) []uint32 {
 	// let n the number of available backends.
-	n := uint64(len(availableBackends))
+	n := uint32(len(availableBackends))
 	// let m the length of the lookup table
-	m := uint64(lookupTableLength)
+	m := uint32(lookupTableLength)
 	// let rem the remainder of m/n.
 	rem := m % n
 
 	// evenly distribute map.
-	distribution := make(map[uint64]uint64, n)
-	banned := make(map[uint64]struct{})
+	distribution := make(map[uint32]uint32, n)
+	banned := make(map[uint32]struct{})
 	for j := range n {
 		distribution[j] = m / n
 	}
 
 	// lookup table
-	lup := make(map[uint64]string, m)
+	lup := make(map[uint32]uint32, m)
 
 	// M[j] holds the latest index of B[j]
-	M := make([]uint64, n)
+	M := make([]uint32, n)
 	for j := range n {
-		mod := availableBackends[j].HashedId() % m
+		mod := availableBackends[j].Coordinates()[0] % m
 		M[j] = mod
 
 		// fill this entry.
-		lup[mod] = availableBackends[j].Id.String()
+		lup[mod] = j
 		distribution[j] -= 1
 	}
 
 	// populate lup
-	for {
-		if uint64(len(banned)) == n {
-			break
-		}
-
+	for uint32(len(banned)) != n {
 		for j := range n {
 			if distribution[j] < 1 {
 				// ensure the map is evenly distributed.
@@ -246,14 +370,14 @@ func RobustSimpleLookupTable(
 			}
 
 			M[j] = Mj
-			lup[Mj] = availableBackends[j].Id.String()
+			lup[Mj] = j
 			distribution[j] -= 1
 		}
 	}
 
 	// fill reamining fields.
-	var i, j uint64
-	for i = 0; i < n; i++ {
+	var i, j uint32
+	for i = range n {
 		if j > rem-1 {
 			break
 		}
@@ -263,19 +387,17 @@ func RobustSimpleLookupTable(
 			continue
 		}
 
-		lup[i] = availableBackends[j].Id.String()
+		lup[i] = j
 		j++
 	}
 
 	// make into outputformat.
-	keys = make([]uint64, m)
-	values = make([]string, m)
+	out := make([]uint32, m)
 	for k, v := range lup {
-		keys[k] = k
-		values[k] = v
+		out[k] = v
 	}
 
-	return keys, values
+	return out
 }
 
 // Populates a lookup table using fibonacci.
@@ -290,18 +412,18 @@ func RobustSimpleLookupTable(
 // TODO: we must lock the lookup table while the table is being updated.
 func NaiveFibLookupTable(
 	availableBackends []*types.Backend,
-	lookupTableLength Prime,
-) (keys []uint64, values []string) {
+	lookupTableLength uint32,
+) []uint32 {
 	// TODO: improve this to make less disruption when a backend is down or a new
 	// backend is added. The idea is to shard the lookup table, and assign each
 	// backend to one to many shards deterministically. When a backend becomes down
 	// the other backends will take over its shards, without changing previously
 	// held shards.
 
-	var n, m, j, k, currentEntry uint64
+	var n, m, j, k, currentEntry uint32
 
-	n = uint64(len(availableBackends))
-	m = uint64(lookupTableLength)
+	n = uint32(len(availableBackends))
+	m = uint32(lookupTableLength)
 
 	j = 0 // fib index
 	k = 0 // counter < fib[j]
@@ -309,20 +431,17 @@ func NaiveFibLookupTable(
 
 	// evenly distribute map.
 	banned := 0
-	banList := make(map[uint64]struct{}, n)
-	distribution := make(map[uint64]uint64, n)
+	banList := make(map[uint32]struct{}, n)
+	distribution := make(map[uint32]uint32, n)
 	for i := range n {
 		// Ensure there is always an unbanned entry in order to
 		// fill the `m % n` remaining entries.
 		distribution[i] = (m / n) + 1
 	}
 
-	keys = make([]uint64, m)
-	values = make([]string, m)
-
+	out := make([]uint32, m)
 	for i := range m {
-		keys[i] = i
-		values[i] = availableBackends[currentEntry].Id.String()
+		out[i] = currentEntry
 
 		// ensure the map is evenly distributed
 		distribution[currentEntry] -= 1
@@ -349,7 +468,7 @@ func NaiveFibLookupTable(
 		// reset currentEntry && update fib index (j).
 		currentEntry = 0
 		j += 1
-		if j < uint64(len(fib)-1) {
+		if j < uint32(len(fib)-1) {
 			// reset fib index (j) if we exceed it.
 			j = 0
 		}
@@ -359,21 +478,19 @@ func NaiveFibLookupTable(
 		}
 	}
 
-	return keys, values
+	return out
 }
 
 func SimpleLookupTable(
 	availableBackends []*types.Backend,
-	lookupTableLength Prime,
-) (keys []uint64, values []string) {
-	m := uint64(lookupTableLength)
-	keys = make([]uint64, m)
-	values = make([]string, m)
+	lookupTableLength uint32,
+) []uint32 {
+	m := uint32(lookupTableLength)
+	out := make([]uint32, m)
 
 	for i := range m {
-		keys[i] = i
-		values[i] = availableBackends[i%uint64(len(availableBackends))].Id.String()
+		out[i] = i % uint32(len(availableBackends))
 	}
 
-	return keys, values
+	return out
 }
