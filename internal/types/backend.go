@@ -30,13 +30,18 @@ func NewBackend(
 	status BackendStatus,
 ) *Backend {
 	h := sha256.Sum256([]byte(id[:]))
-	i := binary.NativeEndian.Uint64(h[24:32])
+
+	// -- cache coordinates
+	coordinates := [8]uint32{}
+	for i := range 8 {
+		coordinates[i] = binary.NativeEndian.Uint32(h[4*i : 4*(i+1)])
+	}
 
 	return &Backend{
-		Id:       id,
-		Spec:     spec,
-		Status:   status,
-		hashedId: i,
+		Id:          id,
+		Spec:        spec,
+		Status:      status,
+		coordinates: coordinates,
 	}
 }
 
@@ -60,10 +65,10 @@ type (
 		Spec   BackendSpec
 		Status BackendStatus
 
-		hashedId uint64
+		coordinates [8]uint32
 	}
 )
 
-func (b Backend) HashedId() uint64 {
-	return b.hashedId
+func (b Backend) Coordinates() [8]uint32 {
+	return b.coordinates
 }
