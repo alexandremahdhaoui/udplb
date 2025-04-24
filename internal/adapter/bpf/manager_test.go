@@ -18,6 +18,7 @@
 package bpfadapter_test
 
 import (
+	"context"
 	"net"
 	"testing"
 
@@ -32,8 +33,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TODO: implement unit tests
-
 func TestDataStructureManager(t *testing.T) {
 	var (
 		mgr bpfadapter.DataStructureManager
@@ -42,11 +41,9 @@ func TestDataStructureManager(t *testing.T) {
 		lookupTable    *fakebpfstruct.Array[uint32]
 		assignmentFifo *fakebpfstruct.FIFO[bpfadapter.Assignment]
 		sessionMap     *fakebpfstruct.Map[uuid.UUID, uint32]
-
-		err error
 	)
 
-	setup := func(t *testing.T) {
+	setup := func(t *testing.T) func() {
 		t.Helper()
 
 		backendList = fakebpfstruct.NewArray[*bpfadapter.BackendSpec]()
@@ -54,13 +51,20 @@ func TestDataStructureManager(t *testing.T) {
 		assignmentFifo = fakebpfstruct.NewFIFO[bpfadapter.Assignment]()
 		sessionMap = fakebpfstruct.NewMap[uuid.UUID, uint32]()
 
-		mgr, err = bpfadapter.NewDataStructureManager("unit-test", bpfadapter.Objects{
+		mgr = bpfadapter.NewDataStructureManager(bpfadapter.Objects{
 			BackendList:    backendList,
 			LookupTable:    lookupTable,
 			AssignmentFIFO: assignmentFifo,
 			SessionMap:     sessionMap,
 		})
-		require.NoError(t, err)
+
+		// "Subscribe" is called when manager.Run() is called.
+		assignmentFifo.EXPECT("Subscribe", nil)
+		require.NoError(t, mgr.Run(context.Background()))
+
+		return func() {
+			require.NoError(t, mgr.Close())
+		}
 	}
 
 	t.Run("Close", func(t *testing.T) {
@@ -74,38 +78,82 @@ func TestDataStructureManager(t *testing.T) {
 		<-mgr.Done()
 	})
 
-	t.Run("AssignmentSubscribe", func(t *testing.T) {
-		setup(t)
-		assignmentFifo.EXPECT("Subscribe", nil)
+	t.Run("WatchAssignment", func(t *testing.T) {
+		var (
+			n        int
+			input    []bpfadapter.Assignment
+			expected map[types.Assignment]struct{}
+		)
 
-		n := 10
-		expected := make([]bpfadapter.Assignment, n)
-		for i := range n {
-			expected[i] = bpfadapter.Assignment{
-				SessionId: uuid.New(),
-				BackendId: uuid.New(),
-			}
-		}
+		setupWatchAssignment := func(t *testing.T) {
+			t.Helper()
 
-		go func() {
+			n = 10
+			input = make([]bpfadapter.Assignment, n)
+			// we do not care about the order of arrival.
+			expected = make(map[types.Assignment]struct{})
+
 			for i := range n {
-				assignmentFifo.Chan <- expected[i]
+				input[i] = bpfadapter.Assignment{
+					BackendId: uuid.New(),
+					SessionId: uuid.New(),
+				}
+				expected[types.Assignment{
+					BackendId: input[i].BackendId,
+					SessionId: input[i].SessionId,
+				}] = struct{}{}
 			}
-			close(assignmentFifo.Chan)
-		}()
-
-		ch, err := mgr.AssignmentSubscribe()
-		assert.NoError(t, err)
-		i := 0
-		for actual := range ch {
-			assert.Equal(t, expected[i], actual)
-			i++
 		}
+
+		t.Run("happy path", func(t *testing.T) {
+			defer setup(t)()
+			setupWatchAssignment(t)
+
+			go func() {
+				for i := range n {
+					assignmentFifo.Chan <- input[i]
+				}
+			}()
+
+			ch := mgr.WatchAssignment()
+
+			for range n {
+				actual := <-ch
+				_, ok := expected[actual]
+				assert.True(t, ok)
+				delete(expected, actual)
+			}
+			assert.Zero(t, len(expected))
+		})
+
+		t.Run("fifo channel closed unexpectedly", func(t *testing.T) {
+			defer setup(t)()
+			setupWatchAssignment(t)
+
+			smallerN := n - 3
+
+			go func() {
+				for i := range smallerN {
+					assignmentFifo.Chan <- input[i]
+				}
+				// channel is closed early after `smallerN` assignments.
+				close(assignmentFifo.Chan)
+			}()
+
+			ch := mgr.WatchAssignment()
+
+			for range smallerN {
+				actual := <-ch
+				_, ok := expected[actual]
+				assert.True(t, ok)
+				delete(expected, actual)
+			}
+		})
 	})
 
 	t.Run("SetObjects", func(t *testing.T) {
 		t.Run("success", func(t *testing.T) {
-			setup(t)
+			defer setup(t)()
 
 			backendList.EXPECT("SetAndDeferSwitchover", nil)
 			lookupTable.EXPECT("SetAndDeferSwitchover", nil)
@@ -170,7 +218,7 @@ func TestDataStructureManager(t *testing.T) {
 
 	t.Run("SessionBatchUpdate", func(t *testing.T) {
 		t.Run("success", func(t *testing.T) {
-			setup(t)
+			defer setup(t)()
 			sessionMap.EXPECT("BatchUpdate", nil)
 
 			in := map[uuid.UUID]uint32{
@@ -178,13 +226,13 @@ func TestDataStructureManager(t *testing.T) {
 				uuid.New(): 0,
 			}
 
-			assert.NoError(t, mgr.SessionBatchUpdate(in))
+			assert.NoError(t, mgr.BatchUpdateSession(in))
 			assert.Equal(t, in, sessionMap.GetActiveMap())
 		})
 	})
 
 	t.Run("SessionBatchDelete", func(t *testing.T) {
-		setup(t)
+		defer setup(t)()
 		sessionMap.EXPECT("BatchDelete", nil)
 
 		keyToDelete := uuid.New()
@@ -193,7 +241,7 @@ func TestDataStructureManager(t *testing.T) {
 		sessionMap.GetActiveMap()[keyToDelete] = 0
 		sessionMap.GetActiveMap()[otherKey] = 1
 
-		assert.NoError(t, mgr.SessionBatchDelete(keyToDelete))
+		assert.NoError(t, mgr.BatchDeleteSession(keyToDelete))
 		assert.Equal(t, map[uuid.UUID]uint32{otherKey: 1}, sessionMap.GetActiveMap())
 	})
 }

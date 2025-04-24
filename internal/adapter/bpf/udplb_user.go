@@ -58,10 +58,10 @@ type runnable struct {
 
 	// -- mgmt
 
-	running            bool
-	doneCh             chan struct{}
-	propagateCloseFunc func() error
-	mu                 *sync.Mutex
+	running              bool
+	doneCh               chan struct{}
+	closePropagationFunc func() error
+	mu                   *sync.Mutex
 }
 
 // -------------------------------------------------------------------
@@ -70,18 +70,11 @@ type runnable struct {
 
 var ErrCannotCreateNewUDPLBAdapter = errors.New("cannot create new udplb adapter")
 
-// The function loads the bpf program into the kernel.
-//
-// The user obtains 2 data structures that achieve the separation of concern.
-// - One data structure can be used to run the bpf program.
-// - Another can be used to interact with the kernel data structure.
-//
-// To clarify:
-// - The user should not close the Objects data structure.
-// |-> Hence Objects must only implement and expose "Done()"
-//
-// OR: don't bother and run the program in the new func.
-// The function returns (types.DoneCloser, Objects, error) instead.
+// New loads the bpf program into the kernel and returns 2 distinct
+// data structures to achieve separation of concern between:
+// - Running the bpf program itself.
+// - Interacting with the bpf kernel data
+// structures.
 func New(
 	name string,
 	id uuid.UUID,
@@ -125,25 +118,21 @@ func New(
 		return nil, nil, flaterrors.Join(err, ErrCreatingNewBPFProgram)
 	}
 
-	// -- init manager
-	manager, err := NewDataStructureManager(name, objs)
-	if err != nil {
-		return nil, nil, flaterrors.Join(err, ErrCreatingNewBPFProgram)
-	}
-
-	propagateTerminationFunc := func() error {
+	// -- init & run manager
+	manager := NewDataStructureManager(objs)
+	closePropagationFunc := func() error {
 		return manager.Close()
 	}
 
 	return &runnable{
-		name:               name,
-		id:                 id,
-		iface:              iface,
-		objs:               bpfObjects,
-		running:            false,
-		doneCh:             doneCh,
-		propagateCloseFunc: propagateTerminationFunc,
-		mu:                 &sync.Mutex{},
+		name:                 name,
+		id:                   id,
+		iface:                iface,
+		objs:                 bpfObjects,
+		running:              false,
+		doneCh:               doneCh,
+		closePropagationFunc: closePropagationFunc,
+		mu:                   &sync.Mutex{},
 	}, manager, nil
 }
 
@@ -219,7 +208,7 @@ func (r *runnable) Close() error {
 
 	var errs error
 	for _, f := range []func() error{
-		r.propagateCloseFunc,
+		r.closePropagationFunc,
 		r.objs.Close,
 	} {
 		if err := f(); err != nil {
