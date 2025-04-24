@@ -16,7 +16,9 @@
 package bpfadapter
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
@@ -49,7 +51,7 @@ var (
 // Please note that closing the DataStructureManager does not close the
 // underlying bpf data structures.
 type DataStructureManager interface {
-	types.DoneCloser
+	types.Runnable
 
 	// Overwrite existing objects with new objects.
 	SetObjects(
@@ -63,24 +65,25 @@ type DataStructureManager interface {
 
 	// -- Assignment
 
-	// It returns a chan notifying new session assignments.
+	// It returns a chan notifying new session assignments. It can be called
+	// many times.
 	//
-	// There is no point in calling SessionBatchUpdate with
-	// assignment obtains by this method, because the BPF program
-	// already set them to the active map.
-	//
-	// However the user of AssignmentSubscribe must update their
+	// However the user of WatchAssignment must update their
 	// internal representation of the assignment/session map.
-	AssignmentSubscribe() (<-chan Assignment, error)
+	//
+	// Please note, there is no point in calling SessionBatchUpdate with
+	// assignments obtained with this method, because the BPF program already
+	// set them to the active map.
+	WatchAssignment() <-chan types.Assignment
 
 	// -- Session
 
 	// Quickly update keys from the active session map.
 	// NB: To mutate passive maps and trigger a switchover please use SetObjects.
-	SessionBatchUpdate(map[uuid.UUID]uint32) error
+	BatchUpdateSession(map[uuid.UUID]uint32) error
 	// Quickly delete keys from the active session map.
 	// NB: To mutate passive maps and trigger a switchover please use SetObjects.
-	SessionBatchDelete(...uuid.UUID) error
+	BatchDeleteSession(...uuid.UUID) error
 }
 
 // -------------------------------------------------------------------
@@ -88,32 +91,66 @@ type DataStructureManager interface {
 // -------------------------------------------------------------------
 
 type dsManager struct {
-	name    string
+	ctx     context.Context
 	objs    Objects
 	eventCh chan *event
 
 	// -- mgmt
 	running     bool
+	closed      bool
 	doneCh      chan struct{}
 	terminateCh chan struct{}
 	mu          *sync.Mutex
+
+	// -- WatchAssignment
+	awchList []chan<- types.Assignment // aChList is the list of watcher channels
+	// using aMu instead of mu, ensures we avoid deadlock when Close() is called.
+	aMu *sync.Mutex
 }
 
-func NewDataStructureManager(name string, objs Objects) (DataStructureManager, error) {
-	mgr := &dsManager{
-		name:        name,
+func NewDataStructureManager(objs Objects) DataStructureManager {
+	return &dsManager{
+		ctx:         nil, // must be set when Run is called.
 		objs:        objs,
 		eventCh:     make(chan *event),
 		running:     false,
+		closed:      false,
 		doneCh:      make(chan struct{}),
 		terminateCh: make(chan struct{}),
 		mu:          &sync.Mutex{},
+		awchList:    make([]chan<- types.Assignment, 0),
+		aMu:         &sync.Mutex{},
+	}
+}
+
+// -------------------------------------------------------------------
+// -- Run
+// -------------------------------------------------------------------
+
+func (mgr *dsManager) Run(ctx context.Context) error {
+	mgr.mu.Lock()
+	if mgr.running {
+		return types.ErrAlreadyRunning
+	} else if mgr.closed {
+		return types.ErrCannotRunClosedRunnable
+	}
+	mgr.mu.Unlock()
+
+	// start subscribing to assignment.
+	assignmentCh, err := mgr.objs.AssignmentFIFO.Subscribe()
+	if err != nil {
+		return err
 	}
 
-	go mgr.eventLoop()
+	// start loops
+	mgr.mu.Lock()
+	mgr.ctx = ctx
 	mgr.running = true
+	go mgr.eventLoop(assignmentCh)
+	mgr.mu.Unlock()
 
-	return mgr, nil
+	slog.InfoContext(ctx, "bpf data structure manager started successfully")
+	return nil
 }
 
 // -------------------------------------------------------------------
@@ -198,6 +235,11 @@ func newEvent(kind eventKind, v any) (*event, error) {
 
 // -- eventloop
 
+var (
+	qSize               = 10
+	watchWorkerPoolSize = 3 // events are executed sequentially
+)
+
 // This loop ensures that only one goroutine is updating the internal bpf data
 // structures at a time. This synchronization pattern avoids using mutexes. Hence,
 // we do not lock these datastructures, and changes are propagated as quickly as
@@ -206,25 +248,78 @@ func newEvent(kind eventKind, v any) (*event, error) {
 // Please note this function must be executed only once. If the struct was gracefully
 // shut down and you want to start it again, then you must initialize another dsManager
 // struct.
-func (mgr *dsManager) eventLoop() {
+func (mgr *dsManager) eventLoop(assignmentCh <-chan Assignment) {
+	// -- Define 2 worker pools to avoid competition b/w write events and watch.
+
+	eventQ := make(chan func(), qSize)
+	defer close(eventQ)
+	eventDoneCh := util.NewWorkerPool(1, eventQ, mgr.terminateCh)
+
+	watchQ := make(chan func(), qSize)
+	defer close(watchQ)
+	watchDoneCh := util.NewWorkerPool(watchWorkerPoolSize, watchQ, mgr.terminateCh)
+
 	for {
-		// TODO: terminate eventLoop if "objs struct" is closed. (require objs.DoneCloser implemented)
-		// case <- mgr.objs.Done():
-		//     mgr.Close()
-		//     return
+		// -- mgmt
 		select {
-		// receive an event.
-		case e := <-mgr.eventCh:
-			mgr.handleEvent(e)
-		// break the event loop if graceful shutdown signal is received.
+		default:
 		case <-mgr.terminateCh:
-			close(mgr.doneCh)
-			return
-		// also break the loop if the manager is set as "done" for any reason.
-		case <-mgr.doneCh:
-			return
+			// return from the event loop if graceful shutdown signal is received.
+			goto terminate
+		}
+
+		// -- events
+		select {
+		// receive a write event.
+		case e, ok := <-mgr.eventCh:
+			if !ok {
+				go mgr.triggerCloseInternally("internal event channel closed unexpectedly")
+				goto terminate
+			}
+
+			eventQ <- func() {
+				mgr.handleEvent(e)
+			}
+
+		// watch assignments
+		case in, ok := <-assignmentCh:
+			if !ok {
+				go mgr.triggerCloseInternally("FIFO channel closed while watching assignment")
+				goto terminate
+			}
+
+			watchQ <- func() {
+				out := types.Assignment{
+					BackendId: in.BackendId,
+					SessionId: in.SessionId,
+				}
+
+				for _, outCh := range mgr.getAWChList() {
+					// this may block indefinitely if receiver does not read assignment in time.
+					// TODO: please fix this contention problem. maybe use a timeout.
+					outCh <- out
+				}
+			}
+		// don't forget to await a termination signal here as well,
+		// otherwise the event loop may hang for ever.
+		case <-mgr.terminateCh:
+			goto terminate
 		}
 	}
+
+terminate:
+	// -- await until worker pools are all done.
+	<-eventDoneCh
+	<-watchDoneCh
+
+	// -- close channels after watch workers are done,
+	//    otherwise workers will send on closed channel.
+	for _, ch := range mgr.getAWChList() {
+		close(ch)
+	}
+
+	// -- signal this subsystem is done.
+	close(mgr.doneCh)
 }
 
 func (mgr *dsManager) handleEvent(e *event) {
@@ -269,22 +364,35 @@ func (mgr *dsManager) await(e *event) error {
 }
 
 // -------------------------------------------------------------------
-// -- SUBSCRIBE ASSIGNMENT
+// -- WATCH ASSIGNMENT
 // -------------------------------------------------------------------
 
-func (mgr *dsManager) AssignmentSubscribe() (<-chan Assignment, error) {
-	ch, err := mgr.objs.AssignmentFIFO.Subscribe()
-	if err != nil {
-		return nil, err
-	}
-	return ch, nil
+// watchChannelBufferSize ensures the message multiplexing executed in
+// the event loop is performed as fast as possible.
+// It does not reduces the risk of deadlocks.
+var watchChannelBufferSize = 10
+
+func (mgr *dsManager) getAWChList() []chan<- types.Assignment {
+	mgr.aMu.Lock()
+	out := make([]chan<- types.Assignment, len(mgr.awchList))
+	_ = copy(out, mgr.awchList)
+	mgr.aMu.Unlock()
+	return out
+}
+
+func (mgr *dsManager) WatchAssignment() <-chan types.Assignment {
+	ch := make(chan types.Assignment, watchChannelBufferSize)
+	mgr.aMu.Lock()
+	defer mgr.aMu.Unlock()
+	mgr.awchList = append(mgr.awchList, ch)
+	return ch
 }
 
 // -------------------------------------------------------------------
 // -- SESSION BATCH DELETE/UPDATE
 // -------------------------------------------------------------------
 
-func (mgr *dsManager) SessionBatchDelete(batch ...uuid.UUID) error {
+func (mgr *dsManager) BatchDeleteSession(batch ...uuid.UUID) error {
 	e, err := newEvent(eventKindSessionBatchDelete, batch)
 	if err != nil {
 		return err
@@ -303,7 +411,7 @@ func (mgr *dsManager) assignmentBatchDelete(batch []uuid.UUID) error {
 	return nil
 }
 
-func (mgr *dsManager) SessionBatchUpdate(batch map[uuid.UUID]uint32) error {
+func (mgr *dsManager) BatchUpdateSession(batch map[uuid.UUID]uint32) error {
 	e, err := newEvent(eventKindSessionBatchUpdate, batch)
 	if err != nil {
 		return err
@@ -399,14 +507,26 @@ func transformBackendList(in []types.Backend) (out []*udplbBackendSpecT) {
 // -- DoneCloser
 // -------------------------------------------------------------------
 
+func (mgr *dsManager) triggerCloseInternally(reason string) {
+	slog.InfoContext(mgr.ctx, "shutting down DataStructureManager",
+		"reason", reason)
+	if err := mgr.Close(); err != nil {
+		slog.ErrorContext(mgr.ctx, "an error occured while shutting down DataStructureManager",
+			"err", err.Error())
+	}
+}
+
 // Close is idempotent.
 // Close always returns nil.
 // TODO: force closing by using timeout?
 func (mgr *dsManager) Close() error {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
+
 	if !mgr.running {
-		return nil
+		return types.ErrRunnableMustBeRunningToBeClosed
+	} else if mgr.closed {
+		return types.ErrAlreadyClosed
 	}
 
 	// Triggers termination of the event loop
@@ -417,7 +537,9 @@ func (mgr *dsManager) Close() error {
 	close(mgr.eventCh)
 	// Inform that the manager is not running anymore.
 	mgr.running = false
+	mgr.closed = true
 
+	slog.InfoContext(mgr.ctx, "successfully shut down DataStructureManager")
 	return nil
 }
 

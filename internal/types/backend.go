@@ -16,24 +16,68 @@
 package types
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"net"
 
 	"github.com/google/uuid"
 )
 
-// Must be constructed from diverse source of kubernetes resources.
+/*******************************************************************************
+ * BackendSpec
+ *
+ ******************************************************************************/
+
+// BackendSpec is data kind of type `persisted`.
+type BackendSpec struct {
+	IP      net.IP
+	Port    int
+	MacAddr net.HardwareAddr
+
+	// The desired state of the backend.
+	State State
+}
+
+/*******************************************************************************
+ * BackendStatus
+ *
+ ******************************************************************************/
+
+// BackendStatus is a data kind of type `volatile`.
+type BackendStatus struct {
+	// The actual/current state of the backend.
+	State State
+}
+
+/*******************************************************************************
+ * Backend
+ *
+ ******************************************************************************/
+
+const NCoordinates = 4
+
+type Backend struct {
+	Id     uuid.UUID
+	Spec   BackendSpec
+	Status BackendStatus
+
+	coordinates [NCoordinates]uint32
+}
+
+func (b Backend) Coordinates() [NCoordinates]uint32 {
+	return b.coordinates
+}
+
+// May be constructed from varied source, such as kubernetes resources.
 func NewBackend(
 	id uuid.UUID,
 	spec BackendSpec,
 	status BackendStatus,
 ) *Backend {
-	h := sha256.Sum256([]byte(id[:]))
+	h := id // sha256.Sum256([]byte(id[:]))
 
 	// -- cache coordinates
-	coordinates := [8]uint32{}
-	for i := range 8 {
+	coordinates := [NCoordinates]uint32{}
+	for i := range NCoordinates {
 		coordinates[i] = binary.NativeEndian.Uint32(h[4*i : 4*(i+1)])
 	}
 
@@ -43,32 +87,4 @@ func NewBackend(
 		Status:      status,
 		coordinates: coordinates,
 	}
-}
-
-type (
-	BackendSpec struct {
-		IP      net.IP
-		Port    int
-		MacAddr net.HardwareAddr
-
-		// The desired state of the backend.
-		State State
-	}
-
-	BackendStatus struct {
-		// The actual/current state of the backend.
-		State State
-	}
-
-	Backend struct {
-		Id     uuid.UUID
-		Spec   BackendSpec
-		Status BackendStatus
-
-		coordinates [8]uint32
-	}
-)
-
-func (b Backend) Coordinates() [8]uint32 {
-	return b.coordinates
 }

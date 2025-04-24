@@ -17,6 +17,15 @@ package types
 
 import (
 	"context"
+	"errors"
+)
+
+var (
+	ErrAlreadyClosed  = errors.New("trying to close an already closed interface")
+	ErrAlreadyRunning = errors.New("trying to run an already running interface")
+
+	ErrCannotRunClosedRunnable         = errors.New("cannot run a closed runnable")
+	ErrRunnableMustBeRunningToBeClosed = errors.New("runnable must be running to be closed")
 )
 
 // DoneCloser wraps the Close and Done methods. This methods respectively
@@ -24,10 +33,10 @@ import (
 // a channel that's closed when work done on behalf of this interface has
 // been gracefully terminated
 //
-// The behavior of Close after the first call MUST be ineffective.
+// Closing an already closed interface MUST return types.ErrAlreadyClosed.
 type DoneCloser interface {
 	// Close signal the interface to terminate its execution gracefully.
-	// The behavior of Close after the first call MUST be ineffective.
+	// Closing an already closed interface MUST return types.ErrAlreadyClosed.
 	Close() error
 
 	// Done returns a channel that's closed when work done on behalf of this
@@ -36,11 +45,11 @@ type DoneCloser interface {
 }
 
 // Runnable can be run and gracefully shut down.
+// - Please use `<-Done()` to await until the Runnable is done.
+// - Please use `Close()` to terminate the Runnable execution.
 type Runnable interface {
 	DoneCloser
 
-	// Run is not blocking.
-	// - Please use `<-Done()` to await until the Runnable is done.
-	// - Please use `Close()` to terminate the Runnable execution.
+	// Run must return when it has successfully started.
 	Run(ctx context.Context) error
 }
