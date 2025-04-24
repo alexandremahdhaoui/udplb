@@ -1,6 +1,6 @@
 ---
 hostNetdevs:
-  # -- Publicly facing net
+  # -- "Public" network
 
   - name: br0  # public router
     type: bridge
@@ -16,7 +16,7 @@ hostNetdevs:
     type: tap
     master: br0
 
-  # -- Private net
+  # -- "Private" net
 
   - name: br1  # private router
     type: bridge

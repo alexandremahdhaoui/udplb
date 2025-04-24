@@ -1,3 +1,5 @@
+//go:build functional
+
 /*
  * Copyright 2025 Alexandre Mahdhaoui
  *

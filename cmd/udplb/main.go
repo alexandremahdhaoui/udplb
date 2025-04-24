@@ -16,15 +16,21 @@
 
 package main
 
+import (
+	"fmt"
+	"os"
+)
+
 // TODO: end to end test with qemu vms or so.
 // TODO: init a context w/ ifname & process name & use slog.{Info,Error}Context instead.
 
-func main() {}
-
-//	if len(os.Args) != 2 {
-//		fmt.Fprintf(os.Stderr, usage, os.Args[0])
-//		os.Exit(1)
-//	}
 const usage = `USAGE:
 	%s <config file path>
 `
+
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Fprintf(os.Stderr, usage, os.Args[0])
+		os.Exit(1)
+	}
+}
