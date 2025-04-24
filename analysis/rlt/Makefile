@@ -15,7 +15,7 @@ GO_BENCH := go test -v -cpu=$(NPROC) --timeout=180m --tags=benchmark
 # -------------------------------------------------------------- #
 
 BENCHMARK_LOG   := .ignore.benchmark.log
-BENCHMARK_FLAGS := -bench=. --benchmem --benchtime=5x -count=10
+BENCHMARK_FLAGS := -bench=. --benchmem --benchtime=5x -count=40
 BENCHMARK_PATH  := $(ROOT)/internal/adapter/rlt/rlt_test.go
 RUN_BENCHMARK   := $(GO_BENCH) $(BENCHMARK_FLAGS) $(BENCHMARK_PATH)
 

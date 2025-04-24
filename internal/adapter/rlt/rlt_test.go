@@ -68,7 +68,7 @@ func BenchmarkLookupTable(b *testing.B) {
 		"RevCoord":     rltadapter.ReverseCoordinatesLookupTable,
 	}
 
-	primes := []uint32{13, 23, 47, 307}
+	primes := []uint32{13, 23, 47, 307, 4000}
 
 	scenarios := []Scenario{
 		{nBefore: 3, nAfter: 2},
