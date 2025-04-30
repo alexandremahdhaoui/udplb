@@ -66,16 +66,33 @@ func (l *LinkedList[T]) Capacity() int {
 // Append will create a new node containing the data and append it at the end
 // of the linked list.
 func (l *LinkedList[T]) Append(data T) {
+	// This lock will not deadlock, because the 2 critical section in this
+	// function are guarranted not to block.
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	// capacity is set && length is equal to capcity.
+	// -- Pop head if capacity is set, and length and capacity are equal.
 	if l.capacity != 0 && l.length == l.capacity {
-		l.popHead()
+		switch l.length {
+		case 0: // do nothing
+			return
+		case 1: // after popping the last element, the list is empty.
+			l.head = nil
+			l.tail = nil
+		default: // length > 1
+			// -- BEGIN critical section
+			// This will not deadlock because *LLNode[T] does not implement methods
+			// that locks and block; and there are no other locking usage of l.head
+			// that could collide with this.
+			l.head = l.head.Next() // Please note l.head.Next() locks the head node.
+			// -- END critical section
+		}
+		l.length -= 1
 	}
 
-	// -- critical section
-	// This section should not create a deadlock as the l.tail of type *LLNode[T]
-	// never blocks while locking.
+	// -- BEGIN critical section
+	// This will not deadlock because *LLNode[T] does not implement methods
+	// that locks and block; and there are no other locking usage of l.tail
+	// that could collide with this.
 	oldTail := l.tail
 	oldTail.mu.Lock()
 	oldTail.next = &LLNode[T]{
@@ -85,23 +102,10 @@ func (l *LinkedList[T]) Append(data T) {
 		mu:       &sync.Mutex{},
 	}
 	oldTail.mu.Unlock()
-	// -- end critical section
+	// -- END critical section
 
 	l.tail = l.tail.next
 	l.length += 1
-}
-
-func (l *LinkedList[T]) popHead() {
-	switch l.length {
-	case 0: // do nothing
-		return
-	case 1: // after popping the last element, the list is empty.
-		l.head = nil
-		l.tail = nil
-	default: // length > 1
-		l.head = l.head.next
-	}
-	l.length -= 1
 }
 
 func NewLinkedList[T any](
