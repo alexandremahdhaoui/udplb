@@ -19,6 +19,24 @@ import "sync"
 
 // TODO: write unit tests
 
+// TODO: Fix bug where the ring buffer will overwrite a non-read value but
+// it does not increment the value of readIdx.
+//
+// FYI: not incrementing readIdx on "overwrite" will imply that the reader
+// will read a sequence of elements of the buffer that did not appear in
+// the same order.
+//
+// E.g.: size=3
+// 1. rb=[0, nil, nil]; readIdx=0; writeIdx=1; Write 0.
+// 2. rb=[0, 1, 2]; readIdx=0; writeIdx=0; Write 1, Write 2.
+// 3. rb=[nil, 1, 2]; readIdx=1; writeIdx=0; Read->0.
+// 4. rb=[3, 4, 2]; readIdx=1; writeIdx=2; Write 3, Write 4.
+// 5. rb=[3, nil, nil]; readIdx=0; writeIdx=2; Read->4, Write->2.
+//
+// Expected:
+// 4. readIdx=2; writeIdx=2;
+// 5. Read->2, Read->3
+
 func NewRingBuffer[T any](size int) *RingBuffer[T] {
 	return &RingBuffer[T]{
 		buf:      make([]*T, size),
