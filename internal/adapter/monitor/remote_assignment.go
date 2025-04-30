@@ -26,5 +26,5 @@ import "github.com/alexandremahdhaoui/udplb/internal/types"
 type RemoteAssignment interface {
 	types.DoneCloser
 
-	Watch() <-chan types.Assignment // TODO:
+	Watch() (<-chan types.Assignment, error) // TODO:
 }

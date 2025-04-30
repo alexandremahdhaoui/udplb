@@ -17,6 +17,9 @@ package util
 
 import "sync"
 
+// TODO: refactor WorkerPool as a struct instead of fully functional implementation.
+// The struct would make it easier to manage the queue and doneCh.
+
 // NewWorkerPool returns a channel that's closed when work done on behalf
 // of all workers is done.
 func NewWorkerPool(

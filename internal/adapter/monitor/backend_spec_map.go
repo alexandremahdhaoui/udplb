@@ -29,6 +29,11 @@ import (
 // -- LBSpec
 // The LB spec or config cannot be updated at runtime.
 
+type (
+	BackendSpecMap        = map[uuid.UUID]types.BackendSpec
+	BackendSpecMapWatcher = types.Watcher[BackendSpecMap]
+)
+
 type BackendSpecList interface {
 	types.DoneCloser
 

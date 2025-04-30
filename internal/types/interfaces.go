@@ -18,6 +18,8 @@ package types
 import (
 	"context"
 	"errors"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -27,6 +29,13 @@ var (
 	ErrCannotRunClosedRunnable         = errors.New("cannot run a closed runnable")
 	ErrRunnableMustBeRunningToBeClosed = errors.New("runnable must be running to be closed")
 )
+
+// Simple interface that implements Encode and Decode method.
+type Codec interface {
+	Encode() ([]byte, error)
+	// Decode will decode the buffer into itself.
+	Decode(buf []byte) error
+}
 
 // DoneCloser wraps the Close and Done methods. This methods respectively
 // signal the interface to terminate its execution gracefully, and returns
@@ -52,4 +61,78 @@ type Runnable interface {
 
 	// Run must return when it has successfully started.
 	Run(ctx context.Context) error
+}
+
+type Watcher[K any] interface {
+	DoneCloser
+
+	Watch() (<-chan K, error)
+}
+
+// A StateMachine that can be encoded and decoded.
+type StateMachine[T any, U any] interface {
+	Codec
+
+	// Execute the StateMachine with a `verb` and `data` as input.
+	Execute(verb string, data T)
+
+	// State returns the current underlying state of the machine. E.g.:
+	// - For a generic set StateMachine, U is:     map[T]struct{}
+	// - For a generic array StateMachine, U is:   []T
+	// - For a generic counter StateMachine, U is: map[T]int
+	// - For the AssignmentStateMachine, U is:     map[uuid.UUID]uuid.UUID
+	State() U
+
+	// DeepCopy is usually used in order to fork the underlying state.
+	DeepCopy() StateMachine[T, U]
+}
+
+// A Write-Ahead Log interface will provide joiner-nodes with the latest state of the
+// underlying datastructure managed by a state machine and a consitent log.
+// Nodes that misses messages or which state diverges can request a re-sync?
+type WAL[T any] interface {
+	Runnable
+	Watcher[[]T]
+
+	// Propose a new entry.
+	Propose(proposal WALEntry[T]) error
+}
+
+type RawCluster = Cluster[RawData]
+
+// Cluster does not know anything about consensus or write-ahead logs, it only cares
+// about sending and receiving bytes to other nodes over the network.
+type Cluster[T any] interface {
+	Runnable
+
+	// needs to fan-in/merge
+	Send() (chan<- T, error)
+	// needs to multiplex the chan so multiple subsystem can use receive the same stream
+	// of messages from the cluster.
+	Recv() (<-chan T, error)
+
+	// Join a cluster. Advertise itself and discover other nodes.
+	Join() error
+	// Signal other nodes we're leaving the cluster, e.g. for graceful shutdown.
+	// Should be called before Close().
+	// TODO: or should Close always leave the cluster?
+	Leave() error
+
+	// Why do we care about that?
+	ListNodes() []uuid.UUID
+}
+
+type ClusterMux interface {
+	// The filter must also convert and return the message return by Recv().
+	Register(id uuid.UUID, filter func(msg RawData) any) (Cluster[any], error)
+}
+
+// The WAL multiplexer is responsible for passing the right WAL entries to the
+// right WAL interface.
+//
+// WALMux keeps a table that associate a WALId to a WAL[T].
+// It uses that table to find the right WAL interface and decode the RawData into
+// the Data field of a new WALEntry[T].
+type WALMux interface {
+	Register(walId uuid.UUID, v any) (Watcher[any], error)
 }

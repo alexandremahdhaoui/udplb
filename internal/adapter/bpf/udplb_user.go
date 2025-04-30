@@ -45,8 +45,6 @@ import (
 type runnable struct {
 	// -- loadbalancer spec
 
-	// Name of the loadbalancer.
-	name string
 	// Id of this loadbalancer's instance.
 	id uuid.UUID
 	// Network interface the XDP program will attach to.
@@ -76,7 +74,6 @@ var ErrCannotCreateNewUDPLBAdapter = errors.New("cannot create new udplb adapter
 // - Interacting with the bpf kernel data
 // structures.
 func New(
-	name string,
 	id uuid.UUID,
 	iface *net.Interface,
 	ip net.IP,
@@ -125,7 +122,6 @@ func New(
 	}
 
 	return &runnable{
-		name:                 name,
 		id:                   id,
 		iface:                iface,
 		objs:                 bpfObjects,

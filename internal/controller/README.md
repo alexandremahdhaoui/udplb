@@ -32,7 +32,7 @@ in UDPLB.
 - [Op] Start monitoring backends.
 - [Op] Start monitoring local assignments.
 
-- [Ev] Monitoring event shows
+- [Ev] Monitoring event shows up.
 - [Op] Agree on a new state b/w loadbalancers.
 - [Ev] Create an internal consensus event.
 
@@ -69,7 +69,7 @@ Questions:
 
 ## Data kinds
 
-A "data kind" is a kind of data, such as `LiveConfig`, `Assignment` or `BackendState`.
+A "data kind" is a kind of data, such as `BackendSpecList`, `Assignment` or `BackendState`.
 The former is a data kind of type `persisted`.
 The 2 latters are data kinds of type `volatile`.
 
@@ -111,7 +111,7 @@ signalling pathways:
 - **RemoteAssignment**:
   - Signal transduction type: `Paracrine`.
   - Goal: quickly signal other nodes about a new assignment.
-- **AssignmentLog**
+- **AssignmentMap**
   - Signal transduction type: `Endocrine`.
   - Goals:
     - Agree on a consistent log of `Assignment`.
