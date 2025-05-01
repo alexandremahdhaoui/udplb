@@ -59,11 +59,6 @@ type WALEntry[T any] struct {
 	// Data is the data of type T.
 	Data T
 
-	// Hash of this WAL entry.
-	Hash [32]byte
-	// Hash of the previous entry in the WAL.
-	PreviousHash [32]byte
-
 	// The timestamp ensures the proposed entries are consented in the right
 	// order. The timestamp allows the observer WALEntries to process them in
 	// order.
@@ -72,9 +67,18 @@ type WALEntry[T any] struct {
 	// Its purpose is to simplify the dispatchment of entries and the lookup
 	// of the actual type of data T.
 	WALName string
+
+	// ProposalHash is the hash of the proposal.
+	// It's the hash of the binary encoded data of WALEntry excluding the
+	// PreviousHash and Hash (not known at proposal time).
+	ProposalHash [32]byte
+	// PreviousHash is the Hash of the previous entry in the WAL.
+	PreviousHash [32]byte
+	// Hash of this WAL entry.
+	Hash [32]byte
 }
 
-type Proposal[T any] struct {
+type Suggestion[T any] struct {
 	Key  string
 	Data T
 }
@@ -83,8 +87,8 @@ type Proposal[T any] struct {
 func NewProposal[T any](
 	key string,
 	data T,
-) Proposal[T] {
-	return Proposal[T]{
+) Suggestion[T] {
+	return Suggestion[T]{
 		Key:  key,
 		Data: data,
 	}
@@ -94,7 +98,7 @@ func NewProposal[T any](
 func TransformProposalIntoWALEntry[T any](
 	walId uuid.UUID,
 	previousHash [32]byte,
-	proposal Proposal[T],
+	proposal Suggestion[T],
 ) (WALEntry[T], error) {
 	out := WALEntry[T]{
 		PreviousHash: previousHash,
@@ -113,7 +117,7 @@ func TransformProposalIntoWALEntry[T any](
 	return out, nil
 }
 
-func IntoTypedWALEntry[T any](
+func RawWALEntryInto[T any](
 	in RawWALEntry,
 ) (WALEntry[T], error) {
 	out := WALEntry[T]{
