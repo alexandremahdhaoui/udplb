@@ -128,10 +128,10 @@ func NonBlockingDispatchFunc[T any](w *WatcherMux[T], v T) {
 func NewTimedOutDispatchFunc[T any](timeoutDuration time.Duration) WatcherMuxDispatchFunc[T] {
 	return func(w *WatcherMux[T], v T) {
 		for _, ch := range w.GetChanList() {
-			toCh := time.After(timeoutDuration)
+			timeoutCh := time.After(timeoutDuration)
 			select {
 			case ch <- v:
-			case <-toCh:
+			case <-timeoutCh:
 			}
 		}
 	}
@@ -146,10 +146,10 @@ func NewWorkerPoolTimedOutDispatchFunc[T any](
 	return func(w *WatcherMux[T], v T) {
 		for _, ch := range w.GetChanList() {
 			workerPoolQueue <- func() {
-				toCh := time.After(timeoutDuration)
+				timeoutCh := time.After(timeoutDuration)
 				select {
 				case ch <- v:
-				case <-toCh:
+				case <-timeoutCh:
 				}
 			}
 		}

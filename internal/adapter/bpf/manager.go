@@ -516,10 +516,10 @@ func (mgr *dsManager) Close() error {
 	close(mgr.terminateCh)
 
 	// -- Await graceful termination in timely manner.
-	toCh := time.After(closeTimeoutDuration)
+	timeoutCh := time.After(closeTimeoutDuration)
 	select {
 	case <-mgr.doneCh:
-	case <-toCh:
+	case <-timeoutCh:
 	}
 
 	// -- Safely close the event channel.
