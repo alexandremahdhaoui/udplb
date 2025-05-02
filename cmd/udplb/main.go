@@ -22,9 +22,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
 	bpfadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/bpf"
-	monitoradapter "github.com/alexandremahdhaoui/udplb/internal/adapter/monitor"
 	"github.com/google/uuid"
 )
 
@@ -65,22 +63,15 @@ func main() {
 	}
 
 	var (
-		bsl monitoradapter.BackendSpecList
-		bs  monitoradapter.BackendState
-		ra  monitoradapter.RemoteAssignment
+		bl monitoradapter.backendSpecList
+		bs monitoradapter.backendState
+		ra monitoradapter.remoteAssignment
 	)
 
-	// move to controller
-	var errs error
-	bslCh, err := bsl.Watch()
-	errs = flaterrors.Join(errs, err)
-	bsCh, err := bs.Watch()
-	errs = flaterrors.Join(errs, err)
-	raCh, err := ra.Watch()
-	errs = flaterrors.Join(errs, err)
-	if errs != nil {
-		errExit(errs)
-	}
+	// move those to controller
+	blCh, blCancel := bl.Watch()
+	bsCh, bsCancel := bs.Watch()
+	raCh, raCancel := ra.Watch()
 }
 
 func fmtExit(format string, a ...any) {

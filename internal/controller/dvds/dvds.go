@@ -17,6 +17,7 @@ package dvds
 
 import (
 	"context"
+	"time"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -90,7 +91,17 @@ func New[T any, U any](
 
 // Propose implements types.WAL.
 func (ds *dvds[T, U]) Propose(proposal T) error {
-	return ds.cmdWAL.Propose(proposal)
+	// TODO: how?
+	entry := types.WALEntry[T]{
+		Key:          "",
+		Data:         proposal,
+		Timestamp:    time.Time{},
+		WALName:      "",
+		ProposalHash: [32]byte{},
+		PreviousHash: [32]byte{},
+		Hash:         [32]byte{},
+	}
+	return ds.cmdWAL.Propose(entry)
 }
 
 /*******************************************************************************
@@ -100,8 +111,8 @@ func (ds *dvds[T, U]) Propose(proposal T) error {
 
 // Watch will return a representation of the underlying state as soon as the
 // state machine changed.
-func (ds *dvds[T, U]) Watch() (<-chan U, error) {
-	return ds.watcherMux.Watch(), nil
+func (ds *dvds[T, U]) Watch() (<-chan U, func()) {
+	return ds.watcherMux.Watch(nil)
 }
 
 /*******************************************************************************

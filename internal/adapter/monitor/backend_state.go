@@ -17,15 +17,12 @@ package monitoradapter
 
 import "github.com/alexandremahdhaoui/udplb/internal/types"
 
+var _ types.Watcher[types.BackendStatus] = &backendState{}
+
 // TODO: Define & Implement the Backend monitor.
 
 // BackendState is data kind of type `volatile`.
 //
 // Please see `internal/controller/README.md` to learn more about data
 // kinds, types, signal transduction and pathways.
-type BackendState interface {
-	types.DoneCloser
-
-	// TODO: Pass a context.Context?
-	Watch() (<-chan types.BackendStatus, error)
-}
+type backendState struct{}

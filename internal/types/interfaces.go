@@ -63,10 +63,12 @@ type Runnable interface {
 	Run(ctx context.Context) error
 }
 
-type Watcher[K any] interface {
+type Watcher[T any] interface {
 	DoneCloser
 
-	Watch() (<-chan K, error)
+	// Watch returns a receiver channel and a cancel func to stop
+	// watching.
+	Watch() (<-chan T, func())
 }
 
 // A StateMachine that can be encoded and decoded.
@@ -106,10 +108,16 @@ type Cluster[T any] interface {
 	Runnable
 
 	// needs to fan-in/merge
+	// TODO: Send() should accept a channel instead of returning one. It simplifies
+	// closing the chan.
+	// TODO: figure out how to select from many channels programmatically.
+	// e.g. using reflect.Select() || OR https://stackoverflow.com/a/32342741 ||
+	// OR Check code about merging channels.
 	Send() (chan<- T, error)
 	// needs to multiplex the chan so multiple subsystem can use receive the same stream
 	// of messages from the cluster.
-	Recv() (<-chan T, error)
+	// The returned cancel function can be used to stop receiving.
+	Recv() (<-chan T, func())
 
 	// Join a cluster. Advertise itself and discover other nodes.
 	Join() error
@@ -118,13 +126,8 @@ type Cluster[T any] interface {
 	// TODO: or should Close always leave the cluster?
 	Leave() error
 
-	// Why do we care about that?
+	// We need to be aware of the nodes in the cluster when trying to make a consensus.
 	ListNodes() []uuid.UUID
-}
-
-type ClusterMux interface {
-	// The filter must also convert and return the message return by Recv().
-	Register(id uuid.UUID, filter func(msg RawData) any) (Cluster[any], error)
 }
 
 // The WAL multiplexer is responsible for passing the right WAL entries to the

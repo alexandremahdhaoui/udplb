@@ -27,18 +27,19 @@ var WatcherMuxRecommendedBufferSize = 10
  *
  ******************************************************************************/
 
-// The channelBufferSize ensures the message multiplexing is performed as fast
-// as possible. However, it does not reduce risk of deadlocks.
 func NewWatcherMux[T any](
+	// channelBufferSize ensures the message multiplexing is performed as fast
+	// as possible. However, it does not reduce risk of deadlocks.
 	channelBufferSize int,
+	// Please choose a dispatchFunc that does not block indefinitely in order to
+	// avoid deadlocks.
 	dispatchFunc WatcherMuxDispatchFunc[T],
 ) *WatcherMux[T] {
 	return &WatcherMux[T]{
-		chList:       make([]chan<- T, 0),
-		chSize:       channelBufferSize,
-		mu:           &sync.Mutex{},
-		dispatchFunc: dispatchFunc,
-		doneCh:       make(chan struct{}),
+		watcherChCapacity: channelBufferSize,
+		mu:                &sync.Mutex{},
+		dispatchFunc:      dispatchFunc,
+		doneCh:            make(chan struct{}),
 	}
 }
 
@@ -48,47 +49,72 @@ func NewWatcherMux[T any](
  *
  ******************************************************************************/
 
-// TODO: Let watcher deregister itself from the watch list.
-// - With a defer func returned to the user and an internal hashmap?
+type FilterFunc func(v any) bool
+
+type watcher[T any] struct {
+	ch     chan T
+	doneCh chan struct{}
+	filter FilterFunc
+}
 
 type WatcherMux[T any] struct {
-	chList       []chan<- T // list of watcher channels
-	chSize       int
-	mu           *sync.Mutex
+	watchers          map[int]*watcher[T] // set of watchers
+	watcherIdCount    int
+	watcherChCapacity int
+
 	dispatchFunc WatcherMuxDispatchFunc[T]
 
+	mu     *sync.Mutex
 	doneCh chan struct{}
 }
 
-func (w *WatcherMux[T]) Watch() <-chan T {
-	ch := make(chan T, w.chSize)
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.chList = append(w.chList, ch)
-	return ch
+func (wm *WatcherMux[T]) Watch(filter FilterFunc) (<-chan T, func()) {
+	w := &watcher[T]{
+		ch:     make(chan T, wm.watcherChCapacity),
+		doneCh: make(chan struct{}),
+		filter: filter,
+	}
+
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	id := wm.watcherIdCount
+	wm.watcherIdCount += 1
+	wm.watchers[id] = w
+
+	return w.ch, func() {
+		wm.mu.Lock()
+		defer wm.mu.Unlock()
+		close(w.doneCh)
+		close(w.ch)
+		delete(wm.watchers, id)
+	}
 }
 
-func (w *WatcherMux[T]) GetChanList() []chan<- T {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	out := make([]chan<- T, len(w.chList))
-	_ = copy(out, w.chList)
+func (wm *WatcherMux[T]) Dispatch(v T) {
+	wm.dispatchFunc(wm, v)
+}
+
+func (wm *WatcherMux[T]) getWatcherList() []*watcher[T] {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	out := make([]*watcher[T], len(wm.watchers))
+	i := 0
+	for w := range wm.watchers {
+		out[i] = wm.watchers[w]
+		i++
+	}
 	return out
 }
 
-func (w *WatcherMux[T]) Dispatch(v T) {
-	w.dispatchFunc(w, v)
+func (wm *WatcherMux[T]) Done() <-chan struct{} {
+	return wm.doneCh
 }
 
-func (w *WatcherMux[T]) Done() <-chan struct{} {
-	return w.doneCh
-}
-
-func (w *WatcherMux[T]) Close() error {
-	for _, ch := range w.GetChanList() {
-		close(ch)
+func (wm *WatcherMux[T]) Close() error {
+	for _, w := range wm.getWatcherList() {
+		close(w.ch)
 	}
-	close(w.doneCh)
+	close(wm.doneCh)
 	return nil
 }
 
@@ -97,61 +123,64 @@ func (w *WatcherMux[T]) Close() error {
  *
  ******************************************************************************/
 
-type WatcherMuxDispatchFunc[T any] func(*WatcherMux[T], T)
-
-// BlockingDispatchFunc may block indefinitely if receiver does not read from
-// the channel in a timely manner.
-func BlockingDispatchFunc[T any](w *WatcherMux[T], v T) {
-	for _, ch := range w.GetChanList() {
-		ch <- v
-	}
-}
+type (
+	WatcherMuxDispatchFunc[T any] func(*WatcherMux[T], T)
+)
 
 // NonBlockingDispatchFunc may drop items if receiver does not read from the
 // channel in a timely manner.
-func NonBlockingDispatchFunc[T any](w *WatcherMux[T], v T) {
-	for _, ch := range w.GetChanList() {
+func NonBlockingDispatchFunc[T any](wm *WatcherMux[T], v T) {
+	for _, w := range wm.getWatcherList() {
+		if w.filter != nil && !w.filter(v) {
+			continue // skip
+		}
 		select {
-		case ch <- v:
+		case <-w.doneCh:
+		case w.ch <- v:
 		default:
 		}
 	}
 }
 
-// The closure returned by NewTimedOutDispatchFunc sends to the outgoing channels
+// The closure returned by NewDispatchFuncWithTimeout sends to the outgoing channels
 // sequentially. If a channel is full it will block and try to send to it for
 // `timeoutDuration` and move on to the next channel after that duration.
 //
 // This implementation may be very slow but avoids the deadlock scenarios implied
 // by the BlockingDispatchFunc, and potentially reduces the amount of items of the
 // NonBlockingDispatchFunc.
-func NewTimedOutDispatchFunc[T any](timeoutDuration time.Duration) WatcherMuxDispatchFunc[T] {
+func NewDispatchFuncWithTimeout[T any](timeoutDuration time.Duration) WatcherMuxDispatchFunc[T] {
 	return func(w *WatcherMux[T], v T) {
-		for _, ch := range w.GetChanList() {
-			timeoutCh := time.After(timeoutDuration)
-			select {
-			case ch <- v:
-			case <-timeoutCh:
-			}
+		for _, w := range w.getWatcherList() {
+			dispatchOne(w, timeoutDuration, v)
 		}
 	}
 }
 
 // Please see internal/util/workerpool.go for more information about the
 // workerPoolQueue parameter.
-func NewWorkerPoolTimedOutDispatchFunc[T any](
+func NewDispatchFuncWithTimoutAndWorkerPool[T any](
 	workerPoolQueue chan<- func(),
 	timeoutDuration time.Duration,
 ) WatcherMuxDispatchFunc[T] {
 	return func(w *WatcherMux[T], v T) {
-		for _, ch := range w.GetChanList() {
+		for _, w := range w.getWatcherList() {
 			workerPoolQueue <- func() {
-				timeoutCh := time.After(timeoutDuration)
-				select {
-				case ch <- v:
-				case <-timeoutCh:
-				}
+				dispatchOne(w, timeoutDuration, v)
 			}
 		}
+	}
+}
+
+func dispatchOne[T any](w *watcher[T], timeoutDuration time.Duration, v T) {
+	if w.filter != nil && !w.filter(v) {
+		return
+	}
+
+	timeoutCh := time.After(timeoutDuration)
+	select {
+	case <-w.doneCh:
+	case w.ch <- v:
+	case <-timeoutCh:
 	}
 }

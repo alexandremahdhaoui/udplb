@@ -66,16 +66,17 @@ type DataStructureManager interface {
 
 	// -- Assignment
 
-	// It returns a chan notifying new session assignments. It can be called
-	// many times.
+	// It returns a receiver channel notifying new session assignments
+	// and a cancel func to stop watching.
+	// This function can be called many times.
 	//
-	// However the user of WatchAssignment must update their
-	// internal representation of the assignment/session map.
+	// The user of WatchAssignment must update their internal representation
+	// of the assignment/session map.
 	//
 	// Please note, there is no point in calling SessionBatchUpdate with
 	// assignments obtained with this method, because the BPF program already
 	// set them to the active map.
-	WatchAssignment() <-chan types.Assignment
+	WatchAssignment() (<-chan types.Assignment, func())
 
 	// -- Session
 
@@ -364,8 +365,8 @@ func (mgr *dsManager) await(e *event) error {
 // -- WATCH ASSIGNMENT
 // -------------------------------------------------------------------
 
-func (mgr *dsManager) WatchAssignment() <-chan types.Assignment {
-	return mgr.assignmentWatcherMux.Watch()
+func (mgr *dsManager) WatchAssignment() (<-chan types.Assignment, func()) {
+	return mgr.assignmentWatcherMux.Watch(nil)
 }
 
 // -------------------------------------------------------------------
@@ -500,7 +501,6 @@ var closeTimeoutDuration = 5 * time.Second
 
 // Close is idempotent.
 // Close always returns nil.
-// TODO: force closing by using timeout?
 func (mgr *dsManager) Close() error {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
