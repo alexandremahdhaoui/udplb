@@ -23,8 +23,6 @@ import "github.com/alexandremahdhaoui/udplb/internal/types"
 // - open a UDP socket and listen for any assignment event.
 // - Assignment events can be updates or deletions.
 
-type RemoteAssignment interface {
-	types.DoneCloser
+var _ types.Watcher[types.Assignment] = &RemoteAssignment{}
 
-	Watch() <-chan types.Assignment // TODO:
-}
+type RemoteAssignment struct{}

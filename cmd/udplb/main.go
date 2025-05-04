@@ -17,8 +17,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"os"
+
+	bpfadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/bpf"
+	"github.com/google/uuid"
 )
 
 // TODO: end to end test with qemu vms or so.
@@ -30,7 +35,51 @@ const usage = `USAGE:
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, usage, os.Args[0])
-		os.Exit(1)
+		fmtExit(usage, os.Args[0])
 	}
+
+	ctx := context.TODO()
+
+	name := "todo"
+	instanceId := uuid.New()
+	iface, _ := net.InterfaceByName("todo")
+	ip := net.ParseIP("todo")
+	port := uint16(12345)
+	lookupTableSize := uint32(23)
+
+	bpfProgram, manager, err := bpfadapter.New(instanceId, iface, ip, port, lookupTableSize)
+	if err != nil {
+		errExit(err)
+	}
+
+	// move to controller
+	if err := bpfProgram.Run(ctx); err != nil {
+		errExit(err)
+	}
+
+	// move to controller
+	if err := manager.Run(ctx); err != nil {
+		errExit(err)
+	}
+
+	var (
+		bl monitoradapter.backendSpecList
+		bs monitoradapter.backendState
+		ra monitoradapter.remoteAssignment
+	)
+
+	// move those to controller
+	blCh, blCancel := bl.Watch()
+	bsCh, bsCancel := bs.Watch()
+	raCh, raCancel := ra.Watch()
+}
+
+func fmtExit(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format, a...)
+	os.Exit(1)
+}
+
+func errExit(err error) {
+	fmt.Fprintf(os.Stderr, err.Error())
+	os.Exit(1)
 }

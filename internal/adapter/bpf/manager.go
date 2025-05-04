@@ -20,6 +20,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -65,16 +66,17 @@ type DataStructureManager interface {
 
 	// -- Assignment
 
-	// It returns a chan notifying new session assignments. It can be called
-	// many times.
+	// It returns a receiver channel notifying new session assignments
+	// and a cancel func to stop watching.
+	// This function can be called many times.
 	//
-	// However the user of WatchAssignment must update their
-	// internal representation of the assignment/session map.
+	// The user of WatchAssignment must update their internal representation
+	// of the assignment/session map.
 	//
 	// Please note, there is no point in calling SessionBatchUpdate with
 	// assignments obtained with this method, because the BPF program already
 	// set them to the active map.
-	WatchAssignment() <-chan types.Assignment
+	WatchAssignment() (<-chan types.Assignment, func())
 
 	// -- Session
 
@@ -95,31 +97,32 @@ type dsManager struct {
 	objs    Objects
 	eventCh chan *event
 
+	// -- multiplexers
+
+	assignmentWatcherMux *util.WatcherMux[types.Assignment]
+
 	// -- mgmt
 	running     bool
 	closed      bool
 	doneCh      chan struct{}
 	terminateCh chan struct{}
 	mu          *sync.Mutex
-
-	// -- WatchAssignment
-	awchList []chan<- types.Assignment // aChList is the list of watcher channels
-	// using aMu instead of mu, ensures we avoid deadlock when Close() is called.
-	aMu *sync.Mutex
 }
 
-func NewDataStructureManager(objs Objects) DataStructureManager {
+func NewDataStructureManager(
+	objs Objects,
+	assignmentWatcherMux *util.WatcherMux[types.Assignment],
+) DataStructureManager {
 	return &dsManager{
-		ctx:         nil, // must be set when Run is called.
-		objs:        objs,
-		eventCh:     make(chan *event),
-		running:     false,
-		closed:      false,
-		doneCh:      make(chan struct{}),
-		terminateCh: make(chan struct{}),
-		mu:          &sync.Mutex{},
-		awchList:    make([]chan<- types.Assignment, 0),
-		aMu:         &sync.Mutex{},
+		ctx:                  nil, // must be set when Run is called.
+		objs:                 objs,
+		eventCh:              make(chan *event),
+		running:              false,
+		closed:               false,
+		doneCh:               make(chan struct{}),
+		terminateCh:          make(chan struct{}),
+		mu:                   &sync.Mutex{},
+		assignmentWatcherMux: assignmentWatcherMux,
 	}
 }
 
@@ -253,11 +256,11 @@ func (mgr *dsManager) eventLoop(assignmentCh <-chan Assignment) {
 
 	eventQ := make(chan func(), qSize)
 	defer close(eventQ)
-	eventDoneCh := util.NewWorkerPool(1, eventQ, mgr.terminateCh)
+	eventDoneCh := util.NewFunctionalWorkerPool(1, eventQ, mgr.terminateCh)
 
 	watchQ := make(chan func(), qSize)
 	defer close(watchQ)
-	watchDoneCh := util.NewWorkerPool(watchWorkerPoolSize, watchQ, mgr.terminateCh)
+	watchDoneCh := util.NewFunctionalWorkerPool(watchWorkerPoolSize, watchQ, mgr.terminateCh)
 
 	for {
 		// -- mgmt
@@ -289,16 +292,10 @@ func (mgr *dsManager) eventLoop(assignmentCh <-chan Assignment) {
 			}
 
 			watchQ <- func() {
-				out := types.Assignment{
+				mgr.assignmentWatcherMux.Dispatch(types.Assignment{
 					BackendId: in.BackendId,
 					SessionId: in.SessionId,
-				}
-
-				for _, outCh := range mgr.getAWChList() {
-					// this may block indefinitely if receiver does not read assignment in time.
-					// TODO: please fix this contention problem. maybe use a timeout.
-					outCh <- out
-				}
+				})
 			}
 		// don't forget to await a termination signal here as well,
 		// otherwise the event loop may hang for ever.
@@ -312,10 +309,11 @@ terminate:
 	<-eventDoneCh
 	<-watchDoneCh
 
-	// -- close channels after watch workers are done,
+	// -- close mux channels after watch-workers are done,
 	//    otherwise workers will send on closed channel.
-	for _, ch := range mgr.getAWChList() {
-		close(ch)
+	if err := mgr.assignmentWatcherMux.Close(); err != nil {
+		slog.ErrorContext(mgr.ctx, "an error occured while closing DatastructureManager",
+			"err", err.Error())
 	}
 
 	// -- signal this subsystem is done.
@@ -367,25 +365,8 @@ func (mgr *dsManager) await(e *event) error {
 // -- WATCH ASSIGNMENT
 // -------------------------------------------------------------------
 
-// watchChannelBufferSize ensures the message multiplexing executed in
-// the event loop is performed as fast as possible.
-// It does not reduces the risk of deadlocks.
-var watchChannelBufferSize = 10
-
-func (mgr *dsManager) getAWChList() []chan<- types.Assignment {
-	mgr.aMu.Lock()
-	out := make([]chan<- types.Assignment, len(mgr.awchList))
-	_ = copy(out, mgr.awchList)
-	mgr.aMu.Unlock()
-	return out
-}
-
-func (mgr *dsManager) WatchAssignment() <-chan types.Assignment {
-	ch := make(chan types.Assignment, watchChannelBufferSize)
-	mgr.aMu.Lock()
-	defer mgr.aMu.Unlock()
-	mgr.awchList = append(mgr.awchList, ch)
-	return ch
+func (mgr *dsManager) WatchAssignment() (<-chan types.Assignment, func()) {
+	return mgr.assignmentWatcherMux.Watch(nil)
 }
 
 // -------------------------------------------------------------------
@@ -516,26 +497,35 @@ func (mgr *dsManager) triggerCloseInternally(reason string) {
 	}
 }
 
+var closeTimeoutDuration = 5 * time.Second
+
 // Close is idempotent.
 // Close always returns nil.
-// TODO: force closing by using timeout?
 func (mgr *dsManager) Close() error {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
+	// -- handle errors
 	if !mgr.running {
 		return types.ErrRunnableMustBeRunningToBeClosed
 	} else if mgr.closed {
 		return types.ErrAlreadyClosed
 	}
 
-	// Triggers termination of the event loop
+	// -- Triggers termination of the event loop
 	close(mgr.terminateCh)
-	// Await graceful termination
-	<-mgr.doneCh
-	// Safely close the event channel.
+
+	// -- Await graceful termination in timely manner.
+	timeoutCh := time.After(closeTimeoutDuration)
+	select {
+	case <-mgr.doneCh:
+	case <-timeoutCh:
+	}
+
+	// -- Safely close the event channel.
 	close(mgr.eventCh)
-	// Inform that the manager is not running anymore.
+
+	// -- Persist information that the manager is not running anymore.
 	mgr.running = false
 	mgr.closed = true
 
