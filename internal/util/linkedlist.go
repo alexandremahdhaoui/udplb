@@ -80,10 +80,12 @@ func (l *LinkedList[T]) Append(data T) {
 			l.tail = nil
 		default: // length > 1
 			// -- BEGIN critical section
-			// This will not deadlock because *LLNode[T] does not implement methods
-			// that locks and block; and there are no other locking usage of l.head
-			// that could collide with this.
-			l.head = l.head.Next() // Please note l.head.Next() locks the head node.
+			// This will not deadlock because *LLNode[T] does not implement
+			// methods that locks and block; and there are no other locking
+			// usage of l.head that could collide with this.
+			// Please note l.head.Next() locks the head node.
+			l.head = l.head.Next()
+
 			// -- END critical section
 		}
 		l.length -= 1

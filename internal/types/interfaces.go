@@ -107,13 +107,7 @@ type RawCluster = Cluster[RawData]
 type Cluster[T any] interface {
 	Runnable
 
-	// needs to fan-in/merge
-	// TODO: Send() should accept a channel instead of returning one. It simplifies
-	// closing the chan.
-	// TODO: figure out how to select from many channels programmatically.
-	// e.g. using reflect.Select() || OR https://stackoverflow.com/a/32342741 ||
-	// OR Check code about merging channels.
-	Send() (chan<- T, error)
+	Send(ch <-chan T) error
 	// needs to multiplex the chan so multiple subsystem can use receive the same stream
 	// of messages from the cluster.
 	// The returned cancel function can be used to stop receiving.

@@ -147,8 +147,8 @@ func NonBlockingDispatchFunc[T any](wm *WatcherMux[T], v T) {
 // `timeoutDuration` and move on to the next channel after that duration.
 //
 // This implementation may be very slow but avoids the deadlock scenarios implied
-// by the BlockingDispatchFunc, and potentially reduces the amount of items of the
-// NonBlockingDispatchFunc.
+// by the BlockingDispatchFunc, and potentially reduces the amount of items lost
+// compared to the NonBlockingDispatchFunc.
 func NewDispatchFuncWithTimeout[T any](timeoutDuration time.Duration) WatcherMuxDispatchFunc[T] {
 	return func(w *WatcherMux[T], v T) {
 		for _, w := range w.getWatcherList() {
@@ -159,7 +159,7 @@ func NewDispatchFuncWithTimeout[T any](timeoutDuration time.Duration) WatcherMux
 
 // Please see internal/util/workerpool.go for more information about the
 // workerPoolQueue parameter.
-func NewDispatchFuncWithTimoutAndWorkerPool[T any](
+func NewDispatchFuncWithTimeoutAndWorkerPool[T any](
 	workerPoolQueue chan<- func(),
 	timeoutDuration time.Duration,
 ) WatcherMuxDispatchFunc[T] {

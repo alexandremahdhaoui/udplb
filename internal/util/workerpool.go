@@ -15,14 +15,15 @@
  */
 package util
 
-import "sync"
+import (
+	"sync"
 
-// TODO: refactor WorkerPool as a struct instead of fully functional implementation.
-// The struct would make it easier to manage the queue and doneCh.
+	"github.com/alexandremahdhaoui/udplb/internal/types"
+)
 
-// NewWorkerPool returns a channel that's closed when work done on behalf
+// NewFunctionalWorkerPool returns a channel that's closed when work done on behalf
 // of all workers is done.
-func NewWorkerPool(
+func NewFunctionalWorkerPool(
 	n int,
 	q <-chan func(),
 	terminateCh <-chan struct{}, // worker will be gracefully shutdown if closed
@@ -61,4 +62,37 @@ func NewWorkerPool(
 	}()
 
 	return doneCh
+}
+
+var _ types.DoneCloser = &WorkerPool{}
+
+type WorkerPool struct {
+	doneCh      <-chan struct{}
+	terminateCh chan struct{}
+}
+
+// The argument `q` must be specified by the user, this allow the user the choice to
+// buffer or unbuffer the `q` channel.
+func NewWorkerPool(
+	n int,
+	q <-chan func(),
+) *WorkerPool {
+	terminateCh := make(chan struct{})
+	doneCh := NewFunctionalWorkerPool(n, q, terminateCh)
+
+	return &WorkerPool{
+		doneCh:      doneCh,
+		terminateCh: terminateCh,
+	}
+}
+
+// Close does not block. Please use Done().
+func (w *WorkerPool) Close() error {
+	close(w.terminateCh)
+	return nil
+}
+
+// Done implements types.DoneCloser.
+func (w *WorkerPool) Done() <-chan struct{} {
+	return w.doneCh
 }

@@ -256,11 +256,11 @@ func (mgr *dsManager) eventLoop(assignmentCh <-chan Assignment) {
 
 	eventQ := make(chan func(), qSize)
 	defer close(eventQ)
-	eventDoneCh := util.NewWorkerPool(1, eventQ, mgr.terminateCh)
+	eventDoneCh := util.NewFunctionalWorkerPool(1, eventQ, mgr.terminateCh)
 
 	watchQ := make(chan func(), qSize)
 	defer close(watchQ)
-	watchDoneCh := util.NewWorkerPool(watchWorkerPoolSize, watchQ, mgr.terminateCh)
+	watchDoneCh := util.NewFunctionalWorkerPool(watchWorkerPoolSize, watchQ, mgr.terminateCh)
 
 	for {
 		// -- mgmt

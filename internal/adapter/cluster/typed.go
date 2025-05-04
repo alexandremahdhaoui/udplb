@@ -22,14 +22,14 @@ import (
 	"github.com/google/uuid"
 )
 
-var _ types.Cluster[any] = &cluster[any]{}
+var _ types.Cluster[any] = &typedCluster[any]{}
 
 /*******************************************************************************
  * Concrete implementation
  *
  ******************************************************************************/
 
-type cluster[T any] struct {
+type typedCluster[T any] struct {
 	// mgmt
 	terminateCh chan struct{}
 	doneCh      chan struct{}
@@ -41,37 +41,7 @@ type cluster[T any] struct {
  ******************************************************************************/
 
 func New[T any]() types.Cluster[T] {
-	return &cluster[T]{}
-}
-
-/*******************************************************************************
- * Join
- *
- ******************************************************************************/
-
-// Join implements types.Cluster.
-func (c *cluster[T]) Join() error {
-	panic("unimplemented")
-}
-
-/*******************************************************************************
- * Leave
- *
- ******************************************************************************/
-
-// Leave implements types.Cluster.
-func (c *cluster[T]) Leave() error {
-	panic("unimplemented")
-}
-
-/*******************************************************************************
- * ListNodes
- *
- ******************************************************************************/
-
-// ListNodes implements types.Cluster.
-func (c *cluster[T]) ListNodes() []uuid.UUID {
-	panic("unimplemented")
+	return &typedCluster[T]{}
 }
 
 /*******************************************************************************
@@ -80,7 +50,7 @@ func (c *cluster[T]) ListNodes() []uuid.UUID {
  ******************************************************************************/
 
 // Recv implements types.Cluster.
-func (c *cluster[T]) Recv() (<-chan T, error) {
+func (c *typedCluster[T]) Recv() (<-chan T, func()) {
 	// needs a ClusterMultiplexer?
 	panic("unimplemented")
 }
@@ -91,10 +61,17 @@ func (c *cluster[T]) Recv() (<-chan T, error) {
  ******************************************************************************/
 
 // Send implements types.Cluster.
-func (c *cluster[T]) Send() (chan<- T, error) {
-	// send to c.currentLeader().
-	// or: send to all available member.
+func (c *typedCluster[T]) Send(ch <-chan T) error {
+	panic("unimplemented")
+}
 
+/*******************************************************************************
+ * ListNodes
+ *
+ ******************************************************************************/
+
+// ListNodes implements types.Cluster.
+func (c *typedCluster[T]) ListNodes() []uuid.UUID {
 	panic("unimplemented")
 }
 
@@ -104,9 +81,29 @@ func (c *cluster[T]) Send() (chan<- T, error) {
  ******************************************************************************/
 
 // Run implements types.Cluster.
-func (c *cluster[T]) Run(ctx context.Context) error {
+func (c *typedCluster[T]) Run(ctx context.Context) error {
 	// 1. open socket
 	// 2. advertise sockaddr.
+	panic("unimplemented")
+}
+
+/*******************************************************************************
+ * Join
+ *
+ ******************************************************************************/
+
+// Join implements types.Cluster.
+func (c *typedCluster[T]) Join() error {
+	panic("unimplemented")
+}
+
+/*******************************************************************************
+ * Leave
+ *
+ ******************************************************************************/
+
+// Leave implements types.Cluster.
+func (c *typedCluster[T]) Leave() error {
 	panic("unimplemented")
 }
 
@@ -116,12 +113,12 @@ func (c *cluster[T]) Run(ctx context.Context) error {
  ******************************************************************************/
 
 // Close implements types.Cluster.
-func (c *cluster[T]) Close() error {
+func (c *typedCluster[T]) Close() error {
 	close(c.terminateCh)
 	panic("unimplemented")
 }
 
 // Done implements types.Cluster.
-func (c *cluster[T]) Done() <-chan struct{} {
+func (c *typedCluster[T]) Done() <-chan struct{} {
 	return c.doneCh
 }
