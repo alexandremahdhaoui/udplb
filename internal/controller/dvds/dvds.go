@@ -51,7 +51,8 @@ type dvds[T any, U any] struct {
 	stateMachine types.StateMachine[T, U]
 
 	// -- WAL
-	cmdWAL      types.WAL[T]
+	cmdWAL types.WAL[T]
+	// Raw snapshot that can be used to initialize a new state machine.
 	snapshotWAL types.WAL[U]
 
 	// -- WatcherMux
@@ -110,9 +111,9 @@ func (ds *dvds[T, U]) Propose(proposal T) error {
  ******************************************************************************/
 
 // Watch will return a representation of the underlying state as soon as the
-// state machine changed.
+// state machine is mutated.
 func (ds *dvds[T, U]) Watch() (<-chan U, func()) {
-	return ds.watcherMux.Watch(nil)
+	return ds.watcherMux.Watch(util.NoFilter)
 }
 
 /*******************************************************************************

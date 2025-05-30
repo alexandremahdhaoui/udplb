@@ -71,12 +71,24 @@ type Watcher[T any] interface {
 	Watch() (<-chan T, func())
 }
 
+type StateMachineCommand string
+
+const (
+	AppendCommand StateMachineCommand = "Append"
+	DeleteCommand StateMachineCommand = "Delete"
+	PutCommand    StateMachineCommand = "Put"
+)
+
+var ErrUnsupportedStateMachineCommand = errors.New("unsupported state machine command")
+
 // A StateMachine that can be encoded and decoded.
 type StateMachine[T any, U any] interface {
 	Codec
 
 	// Execute the StateMachine with a `verb` and `data` as input.
-	Execute(verb string, data T)
+	// NB: the subject of the command is always the underlying state
+	// of type U of this types.StateMachine instance.
+	Execute(verb StateMachineCommand, obj T) error
 
 	// State returns the current underlying state of the machine. E.g.:
 	// - For a generic set StateMachine, U is:     map[T]struct{}

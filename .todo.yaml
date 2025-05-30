@@ -1,3 +1,6 @@
 ---
 TODOs:
-  - Document the different kinds of notification pathways b/w loadbalancer. I.e. the fast "autocrine/paracrine" UDP pathway, and the slower but regulated "endocrine" WAL-based pathway.
+  - Document the different kinds of notification pathways b/w loadbalancer. I.e. the fast "autocrine/paracrine" UDP pathway, and the slower but regulated "endocrine" WAL-based pathway. Implement internal/adapter/cluster.
+  - Implement internal/adapter/statemachine.
+  - Implement internal/controller/dvds.
+  - Implement internal/adapter/monitor.
