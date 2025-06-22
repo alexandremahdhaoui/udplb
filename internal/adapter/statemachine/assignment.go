@@ -35,26 +35,18 @@ import (
 // However? When a new node joins, how do we send it the snapshot? which node send the snapshot?
 // Elect a leader?
 
-type newAssignmentOption func(*assignmentStateMachine)
-
-func WithInitialState(initialState map[uuid.UUID]uuid.UUID) func(*assignmentStateMachine) {
-	return func(m *assignmentStateMachine) {
-		m.state = initialState
-	}
-}
+var (
+	_ types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] = &assignmentStateMachine{}
+	_ stateSetter[map[uuid.UUID]uuid.UUID]                          = &assignmentStateMachine{}
+)
 
 func NewAssignment(
-	options ...newAssignmentOption,
+	options ...option[types.Assignment, map[uuid.UUID]uuid.UUID],
 ) types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] {
 	out := &assignmentStateMachine{
 		state: make(map[uuid.UUID]uuid.UUID),
 	}
-	for _, o := range options {
-		if o != nil {
-			o(out)
-		}
-	}
-	return out
+	return execOptions(out, options)
 }
 
 type assignmentStateMachine struct {
@@ -62,22 +54,22 @@ type assignmentStateMachine struct {
 }
 
 // Decode implements types.StateMachine.
-func (m *assignmentStateMachine) Decode(buf []byte) error {
-	_, err := binary.Decode(buf, binary.LittleEndian, m.state)
+func (stm *assignmentStateMachine) Decode(buf []byte) error {
+	_, err := binary.Decode(buf, binary.LittleEndian, stm.state)
 	return err
 }
 
 // DeepCopy implements types.StateMachine.
-func (m *assignmentStateMachine) DeepCopy() types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] {
+func (stn *assignmentStateMachine) DeepCopy() types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] {
 	return &assignmentStateMachine{
-		state: m.State(),
+		state: stn.State(),
 	}
 }
 
 // Encode implements types.StateMachine.
-func (m *assignmentStateMachine) Encode() ([]byte, error) {
+func (stm *assignmentStateMachine) Encode() ([]byte, error) {
 	out := make([]byte, 0)
-	_, err := binary.Encode(out, binary.LittleEndian, m.state)
+	_, err := binary.Encode(out, binary.LittleEndian, stm.state)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +78,7 @@ func (m *assignmentStateMachine) Encode() ([]byte, error) {
 
 // Execute implements types.StateMachine.
 // The subject of the verb is always the underlying state of the types.StateMachine.
-func (m *assignmentStateMachine) Execute(
+func (stm *assignmentStateMachine) Execute(
 	verb types.StateMachineCommand,
 	obj types.Assignment,
 ) error {
@@ -94,19 +86,19 @@ func (m *assignmentStateMachine) Execute(
 	default:
 		return types.ErrUnsupportedStateMachineCommand
 	case types.PutCommand:
-		m.executePut(obj)
+		stm.executePut(obj)
 	case types.DeleteCommand:
-		m.executeDelete(obj)
+		stm.executeDelete(obj)
 	}
 	return nil
 }
 
-func (m *assignmentStateMachine) executePut(obj types.Assignment) {
-	m.state[obj.SessionId] = obj.BackendId
+func (stm *assignmentStateMachine) executePut(obj types.Assignment) {
+	stm.state[obj.SessionId] = obj.BackendId
 }
 
-func (m *assignmentStateMachine) executeDelete(obj types.Assignment) {
-	delete(m.state, obj.SessionId)
+func (stm *assignmentStateMachine) executeDelete(obj types.Assignment) {
+	delete(stm.state, obj.SessionId)
 }
 
 // State returns a copy of the underlying state of the machine. E.g.:
@@ -114,8 +106,13 @@ func (m *assignmentStateMachine) executeDelete(obj types.Assignment) {
 // - For a generic array StateMachine, U is:   []T
 // - For a generic counter StateMachine, U is: map[T]int
 // - For the AssignmentStateMachine, U is:     map[uuid.UUID]uuid.UUID
-func (m *assignmentStateMachine) State() map[uuid.UUID]uuid.UUID {
-	out := make(map[uuid.UUID]uuid.UUID, len(m.state))
-	maps.Copy(out, m.state)
+func (stm *assignmentStateMachine) State() map[uuid.UUID]uuid.UUID {
+	out := make(map[uuid.UUID]uuid.UUID, len(stm.state))
+	maps.Copy(out, stm.state)
 	return out
+}
+
+// setState implements stateSetter.
+func (stm *assignmentStateMachine) setState(state map[uuid.UUID]uuid.UUID) {
+	stm.state = state
 }

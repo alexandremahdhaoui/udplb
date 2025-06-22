@@ -14,3 +14,48 @@
  * limitations under the License.
  */
 package statemachineadapter
+
+import "github.com/alexandremahdhaoui/udplb/internal/types"
+
+var (
+	_ types.StateMachine[int, int] = &counterStateMachine[int, int]{}
+	_ stateSetter[int]             = &counterStateMachine[int, int]{}
+)
+
+func NewGenericCounter[T, U int]() types.StateMachine[T, U] {
+	return &counterStateMachine[T, U]{}
+}
+
+type counterStateMachine[T, U int] struct {
+	state U
+}
+
+// Decode implements types.StateMachine.
+func (stm *counterStateMachine[T, U]) Decode(buf []byte) error {
+	panic("unimplemented")
+}
+
+// DeepCopy implements types.StateMachine.
+func (stm *counterStateMachine[T, U]) DeepCopy() types.StateMachine[T, U] {
+	panic("unimplemented")
+}
+
+// Encode implements types.StateMachine.
+func (stm *counterStateMachine[T, U]) Encode() ([]byte, error) {
+	panic("unimplemented")
+}
+
+// Execute implements types.StateMachine.
+func (stm *counterStateMachine[T, U]) Execute(verb types.StateMachineCommand, obj T) error {
+	panic("unimplemented")
+}
+
+// State implements types.StateMachine.
+func (stm *counterStateMachine[T, U]) State() U {
+	panic("unimplemented")
+}
+
+// setState implements stateSetter.
+func (stm *counterStateMachine[T, U]) setState(state U) {
+	stm.state = state
+}

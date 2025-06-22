@@ -22,6 +22,11 @@ import (
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 )
 
+var (
+	_ types.StateMachine[any, []any] = &arrayStateMachine[any, []any]{}
+	_ stateSetter[[]any]             = &arrayStateMachine[any, []any]{}
+)
+
 type FilterFunc[T any] func(obj T, entry T) bool
 
 // TODO: Add support for capacity and max length.
@@ -36,28 +41,30 @@ func NewArray[T any, U []T](
 }
 
 type arrayStateMachine[T any, U []T] struct {
-	state  []T
+	state []T
+	// Filter allows updating or deleting an entry by key.
+	// Put and Delete operations are therefore O(n).
 	filter FilterFunc[T]
 }
 
 // Decode implements types.StateMachine.
-func (m *arrayStateMachine[T, U]) Decode(buf []byte) error {
-	_, err := binary.Decode(buf, binary.LittleEndian, m.state)
+func (stm *arrayStateMachine[T, U]) Decode(buf []byte) error {
+	_, err := binary.Decode(buf, binary.LittleEndian, stm.state)
 	return err
 }
 
 // DeepCopy implements types.StateMachine.
-func (m *arrayStateMachine[T, U]) DeepCopy() types.StateMachine[T, U] {
+func (stm *arrayStateMachine[T, U]) DeepCopy() types.StateMachine[T, U] {
 	return &arrayStateMachine[T, U]{
-		state:  m.State(),
-		filter: m.filter,
+		state:  stm.State(),
+		filter: stm.filter,
 	}
 }
 
 // Encode implements types.StateMachine.
-func (m *arrayStateMachine[T, U]) Encode() ([]byte, error) {
+func (stm *arrayStateMachine[T, U]) Encode() ([]byte, error) {
 	out := make([]byte, 0)
-	_, err := binary.Encode(out, binary.LittleEndian, m.state)
+	_, err := binary.Encode(out, binary.LittleEndian, stm.state)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +73,7 @@ func (m *arrayStateMachine[T, U]) Encode() ([]byte, error) {
 
 // Execute implements types.StateMachine.
 // The subject of the verb is always the underlying state of the types.StateMachine.
-func (m *arrayStateMachine[T, U]) Execute(
+func (stm *arrayStateMachine[T, U]) Execute(
 	verb types.StateMachineCommand,
 	obj T,
 ) error {
@@ -74,55 +81,60 @@ func (m *arrayStateMachine[T, U]) Execute(
 	default:
 		return types.ErrUnsupportedStateMachineCommand
 	case types.AppendCommand:
-		m.executeAppend(obj)
+		stm.executeAppend(obj)
 	case types.PutCommand:
-		return m.executePut(obj)
+		return stm.executePut(obj)
 	case types.DeleteCommand:
-		return m.executeDelete(obj)
+		return stm.executeDelete(obj)
 	}
 	return nil
 }
 
-func (m *arrayStateMachine[T, U]) executeAppend(obj T) {
-	m.state = append(m.state, obj)
+func (stm *arrayStateMachine[T, U]) executeAppend(obj T) {
+	stm.state = append(stm.state, obj)
 }
 
-var ErrOperationIsNotSupported = errors.New("operation is not supported if FilterFunc is nil")
+var ErrOperationRequiresAFilterFunc = errors.New("operation requires a filter func")
 
-func (m *arrayStateMachine[T, U]) executePut(obj T) error {
-	if m.filter == nil {
-		return ErrOperationIsNotSupported
+func (stm *arrayStateMachine[T, U]) executePut(obj T) error {
+	if stm.filter == nil {
+		return ErrOperationRequiresAFilterFunc
 	}
-	for i, o := range m.state {
-		if m.filter(obj, o) {
-			m.state[i] = obj
+	for i, o := range stm.state {
+		if stm.filter(obj, o) {
+			stm.state[i] = obj
 		}
 	}
 	return nil
 }
 
-func (m *arrayStateMachine[T, U]) executeDelete(obj T) error {
-	if m.filter == nil {
-		return ErrOperationIsNotSupported
+func (stm *arrayStateMachine[T, U]) executeDelete(obj T) error {
+	if stm.filter == nil {
+		return ErrOperationRequiresAFilterFunc
 	}
-	for i, o := range m.state {
-		if m.filter(obj, o) {
+	for i, o := range stm.state {
+		if stm.filter(obj, o) {
 			out := make(U, 0)
 			if i != 0 {
-				out = m.state[0:i]
+				out = stm.state[0:i]
 			}
-			if i != len(m.state)-1 {
-				out = append(out, m.state[i:len(m.state)-1]...)
+			if i != len(stm.state)-1 {
+				out = append(out, stm.state[i:len(stm.state)-1]...)
 			}
-			m.state = out
+			stm.state = out
 		}
 	}
 	return nil
 }
 
 // State implements types.StateMachine.
-func (m *arrayStateMachine[T, U]) State() U {
-	out := make(U, len(m.state))
-	copy(out, m.state)
+func (stm *arrayStateMachine[T, U]) State() U {
+	out := make(U, len(stm.state))
+	copy(out, stm.state)
 	return out
+}
+
+// setState implements stateSetter.
+func (stm *arrayStateMachine[T, U]) setState(state U) {
+	stm.state = state
 }
