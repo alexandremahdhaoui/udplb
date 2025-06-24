@@ -22,21 +22,21 @@ import (
 )
 
 var (
-	_ types.StateMachine[uuid.UUID, map[uuid.UUID]struct{}] = &genericSet[uuid.UUID]{}
+	_ types.StateMachine[uuid.UUID, map[uuid.UUID]struct{}] = &set[uuid.UUID]{}
 	_ stateSetter[map[struct {
 		TestValue  int
 		OnePointer *string
-	}]struct{}] = &genericSet[struct {
+	}]struct{}] = &set[struct {
 		TestValue  int
 		OnePointer *string
 	}]{}
 )
 
-func NewGenericSet[T comparable](
+func NewSet[T comparable](
 	// transformFunc must not lock.
 	opts ...option[T, map[T]struct{}],
 ) (types.StateMachine[T, map[T]struct{}], error) {
-	out := &genericSet[T]{
+	out := &set[T]{
 		state: make(map[T]struct{}),
 	}
 	return execOptions(out, opts)
@@ -44,29 +44,29 @@ func NewGenericSet[T comparable](
 
 // TODO: Add support for capacity (as in "max capacity")
 // TODO: Add support for concurrency
-type genericSet[T comparable] struct {
+type set[T comparable] struct {
 	state map[T]struct{}
 }
 
 // Decode implements types.StateMachine.
-func (stm *genericSet[T]) Decode(buf []byte) error {
+func (stm *set[T]) Decode(buf []byte) error {
 	return decodeBinary(buf, stm.state)
 }
 
 // DeepCopy implements types.StateMachine.
-func (stm *genericSet[T]) DeepCopy() types.StateMachine[T, map[T]struct{}] {
-	return &genericSet[T]{
+func (stm *set[T]) DeepCopy() types.StateMachine[T, map[T]struct{}] {
+	return &set[T]{
 		state: stm.State(),
 	}
 }
 
 // Encode implements types.StateMachine.
-func (stm *genericSet[T]) Encode() ([]byte, error) {
+func (stm *set[T]) Encode() ([]byte, error) {
 	return encodeBinary(stm.state)
 }
 
 // Execute implements types.StateMachine.
-func (stm *genericSet[T]) Execute(verb types.StateMachineCommand, obj T) error {
+func (stm *set[T]) Execute(verb types.StateMachineCommand, obj T) error {
 	switch verb {
 	default:
 		return types.ErrUnsupportedStateMachineCommand
@@ -80,11 +80,11 @@ func (stm *genericSet[T]) Execute(verb types.StateMachineCommand, obj T) error {
 }
 
 // State implements types.StateMachine.
-func (stm *genericSet[T]) State() map[T]struct{} {
+func (stm *set[T]) State() map[T]struct{} {
 	return copyMap(stm.state)
 }
 
 // setState implements stateSetter.
-func (stm *genericSet[T]) setState(state map[T]struct{}) {
+func (stm *set[T]) setState(state map[T]struct{}) {
 	stm.state = state
 }

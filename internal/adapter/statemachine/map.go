@@ -24,8 +24,8 @@ import (
 )
 
 var (
-	_ types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] = &genericMap[types.Assignment, uuid.UUID, uuid.UUID]{}
-	_ stateSetter[map[uuid.UUID]struct{}]                           = &genericMap[types.Assignment, uuid.UUID, struct{}]{}
+	_ types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] = &hashmap[types.Assignment, uuid.UUID, uuid.UUID]{}
+	_ stateSetter[map[uuid.UUID]struct{}]                           = &hashmap[types.Assignment, uuid.UUID, struct{}]{}
 )
 
 type TransformFunc[E any, K comparable, V any] func(obj E) (K, V, error)
@@ -37,12 +37,12 @@ var ErrTransformFuncMustNotBeNil = errors.New("TransformFunc[E, K, V] must not b
 // Example: Create an Assignment map:
 //
 //	```go
-//		_ types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] = util.IgnoreErr(NewGenericMap(
+//		_ types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] = util.IgnoreErr(NewMap(
 //			func(obj types.Assignment) (uuid.UUID, uuid.UUID, error) {
 //				return obj.SessionId, obj.BackendId, nil
 //			}))
 //	```
-func NewGenericMap[E any, K comparable, V any](
+func NewMap[E any, K comparable, V any](
 	// transformFunc must not lock.
 	transformFunc TransformFunc[E, K, V],
 	opts ...option[E, map[K]V],
@@ -50,7 +50,7 @@ func NewGenericMap[E any, K comparable, V any](
 	if transformFunc == nil {
 		return nil, ErrTransformFuncMustNotBeNil
 	}
-	out := &genericMap[E, K, V]{
+	out := &hashmap[E, K, V]{
 		state:         make(map[K]V),
 		transformFunc: transformFunc,
 	}
@@ -59,31 +59,31 @@ func NewGenericMap[E any, K comparable, V any](
 
 // TODO: Add support for capacity (as in "max capacity")
 // TODO: Add support for concurrency
-type genericMap[E any, K comparable, V any] struct {
+type hashmap[E any, K comparable, V any] struct {
 	state         map[K]V
 	transformFunc TransformFunc[E, K, V]
 }
 
 // Decode implements types.StateMachine.
-func (stm *genericMap[E, K, V]) Decode(buf []byte) error {
+func (stm *hashmap[E, K, V]) Decode(buf []byte) error {
 	return decodeBinary(buf, stm.state)
 }
 
 // DeepCopy implements types.StateMachine.
-func (stm *genericMap[E, K, V]) DeepCopy() types.StateMachine[E, map[K]V] {
-	return &genericMap[E, K, V]{
+func (stm *hashmap[E, K, V]) DeepCopy() types.StateMachine[E, map[K]V] {
+	return &hashmap[E, K, V]{
 		state:         stm.State(),
 		transformFunc: stm.transformFunc,
 	}
 }
 
 // Encode implements types.StateMachine.
-func (stm *genericMap[E, K, V]) Encode() ([]byte, error) {
+func (stm *hashmap[E, K, V]) Encode() ([]byte, error) {
 	return encodeBinary(stm.state)
 }
 
 // Execute implements types.StateMachine.
-func (stm *genericMap[E, K, V]) Execute(verb types.StateMachineCommand, obj E) error {
+func (stm *hashmap[E, K, V]) Execute(verb types.StateMachineCommand, obj E) error {
 	k, v, err := stm.transformFunc(obj)
 	if err != nil {
 		return err
@@ -102,11 +102,11 @@ func (stm *genericMap[E, K, V]) Execute(verb types.StateMachineCommand, obj E) e
 }
 
 // State implements types.StateMachine.
-func (stm *genericMap[E, K, V]) State() map[K]V {
+func (stm *hashmap[E, K, V]) State() map[K]V {
 	return copyMap(stm.state)
 }
 
 // setState implements stateSetter.
-func (stm *genericMap[E, K, V]) setState(state map[K]V) {
+func (stm *hashmap[E, K, V]) setState(state map[K]V) {
 	stm.state = state
 }

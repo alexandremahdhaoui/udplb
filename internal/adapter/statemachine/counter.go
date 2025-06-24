@@ -18,42 +18,42 @@ package statemachineadapter
 import "github.com/alexandremahdhaoui/udplb/internal/types"
 
 var (
-	_ types.StateMachine[int, int] = &counterStateMachine{}
-	_ stateSetter[int]             = &counterStateMachine{}
+	_ types.StateMachine[int, int] = &counter{}
+	_ stateSetter[int]             = &counter{}
 )
 
-func NewGenericCounter(
+func NewCounter(
 	opts ...option[int, int],
 ) (types.StateMachine[int, int], error) {
-	out := &counterStateMachine{}
+	out := &counter{}
 	return execOptions(out, opts)
 }
 
 // TODO: Add support for capacity (as in "max capacity")
 // TODO: Add support for concurrency
-type counterStateMachine struct {
+type counter struct {
 	state int
 }
 
 // Decode implements types.StateMachine.
-func (stm *counterStateMachine) Decode(buf []byte) error {
+func (stm *counter) Decode(buf []byte) error {
 	return decodeBinary(buf, stm.state)
 }
 
 // DeepCopy implements types.StateMachine.
-func (stm *counterStateMachine) DeepCopy() types.StateMachine[int, int] {
-	return &counterStateMachine{
+func (stm *counter) DeepCopy() types.StateMachine[int, int] {
+	return &counter{
 		state: stm.State(),
 	}
 }
 
 // Encode implements types.StateMachine.
-func (stm *counterStateMachine) Encode() ([]byte, error) {
+func (stm *counter) Encode() ([]byte, error) {
 	return encodeBinary(stm.state)
 }
 
 // Execute implements types.StateMachine.
-func (stm *counterStateMachine) Execute(verb types.StateMachineCommand, obj int) error {
+func (stm *counter) Execute(verb types.StateMachineCommand, obj int) error {
 	switch verb {
 	default:
 		return types.ErrUnsupportedStateMachineCommand
@@ -64,11 +64,11 @@ func (stm *counterStateMachine) Execute(verb types.StateMachineCommand, obj int)
 }
 
 // State implements types.StateMachine.
-func (stm *counterStateMachine) State() int {
+func (stm *counter) State() int {
 	return stm.state
 }
 
 // setState implements stateSetter.
-func (stm *counterStateMachine) setState(state int) {
+func (stm *counter) setState(state int) {
 	stm.state = state
 }
