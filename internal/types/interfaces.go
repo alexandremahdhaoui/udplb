@@ -74,6 +74,7 @@ type Watcher[T any] interface {
 type StateMachineCommand string
 
 const (
+	AddCommand    StateMachineCommand = "Add"
 	AppendCommand StateMachineCommand = "Append"
 	DeleteCommand StateMachineCommand = "Delete"
 	PutCommand    StateMachineCommand = "Put"

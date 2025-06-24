@@ -16,7 +16,6 @@
 package statemachineadapter
 
 import (
-	"encoding/binary"
 	"errors"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
@@ -29,15 +28,18 @@ var (
 
 type FilterFunc[T any] func(obj T, entry T) bool
 
-// TODO: Add support for capacity and max length.
 // TODO: How to manage a full write-ahead log?
+// TODO: Add support for capacity (as in "max capacity")
+// TODO: Add support for concurrency
 func NewArray[T any, U []T](
 	filter FilterFunc[T],
-) types.StateMachine[T, U] {
-	return &arrayStateMachine[T, U]{
+	opts ...option[T, U],
+) (types.StateMachine[T, U], error) {
+	out := &arrayStateMachine[T, U]{
 		state:  make(U, 0),
 		filter: filter,
 	}
+	return execOptions(out, opts)
 }
 
 type arrayStateMachine[T any, U []T] struct {
@@ -49,8 +51,7 @@ type arrayStateMachine[T any, U []T] struct {
 
 // Decode implements types.StateMachine.
 func (stm *arrayStateMachine[T, U]) Decode(buf []byte) error {
-	_, err := binary.Decode(buf, binary.LittleEndian, stm.state)
-	return err
+	return decodeBinary(buf, stm.state)
 }
 
 // DeepCopy implements types.StateMachine.
@@ -63,12 +64,7 @@ func (stm *arrayStateMachine[T, U]) DeepCopy() types.StateMachine[T, U] {
 
 // Encode implements types.StateMachine.
 func (stm *arrayStateMachine[T, U]) Encode() ([]byte, error) {
-	out := make([]byte, 0)
-	_, err := binary.Encode(out, binary.LittleEndian, stm.state)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+	return encodeBinary(stm.state)
 }
 
 // Execute implements types.StateMachine.
@@ -82,12 +78,12 @@ func (stm *arrayStateMachine[T, U]) Execute(
 		return types.ErrUnsupportedStateMachineCommand
 	case types.AppendCommand:
 		stm.executeAppend(obj)
+		return nil
 	case types.PutCommand:
 		return stm.executePut(obj)
 	case types.DeleteCommand:
 		return stm.executeDelete(obj)
 	}
-	return nil
 }
 
 func (stm *arrayStateMachine[T, U]) executeAppend(obj T) {

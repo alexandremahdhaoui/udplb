@@ -16,6 +16,10 @@
 package statemachineadapter
 
 import (
+	"encoding/binary"
+	"errors"
+	"maps"
+
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 )
 
@@ -23,14 +27,19 @@ type (
 	// stateSetter is a helper interface to support setting the internal state
 	// of an abstract state machine.
 	stateSetter[U any] interface{ setState(U) }
-	option[T, U any]   func(stateSetter[U])
+	option[T, U any]   func(stateSetter[U]) error
 )
 
 func WithInitialState[T, U any](state U) option[T, U] {
-	return func(m stateSetter[U]) {
+	return func(m stateSetter[U]) error {
 		m.setState(state)
+		return nil
 	}
 }
+
+var ErrCannotExecuteOptionOntoUnexpectedStateMachine = errors.New(
+	"cannot execute option onto unexpected state machine",
+)
 
 // execOptions check if any options are specified, then
 // type assert the input stm for internal interfaces, and
@@ -39,22 +48,36 @@ func WithInitialState[T, U any](state U) option[T, U] {
 func execOptions[T, U any](
 	stm types.StateMachine[T, U],
 	options []option[T, U],
-) types.StateMachine[T, U] {
+) (types.StateMachine[T, U], error) {
 	if len(options) < 1 {
-		return stm
+		return stm, nil
 	}
 	sts, ok := stm.(stateSetter[U])
 	if !ok {
-		panic("cannot execute option onto unexpected state machine")
+		return nil, ErrCannotExecuteOptionOntoUnexpectedStateMachine
 	}
 	for _, o := range options {
 		o(sts)
 	}
-	return stm
+	return stm, nil
 }
 
-// DeepCopy returns a deep copy of the state machine.
-// Useful to fork the state of a data structure.
-func DeepCopy[T, U any](old types.StateMachine[T, U]) types.StateMachine[T, U] {
-	panic("unimplemented")
+func encodeBinary[T any](data T) ([]byte, error) {
+	out := make([]byte, 0)
+	_, err := binary.Encode(out, binary.LittleEndian, data)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func decodeBinary[T any](buf []byte, data T) error {
+	_, err := binary.Decode(buf, binary.LittleEndian, data)
+	return err
+}
+
+func copyMap[K comparable, V any](m map[K]V) map[K]V {
+	out := make(map[K]V, len(m))
+	maps.Copy(out, m)
+	return out
 }

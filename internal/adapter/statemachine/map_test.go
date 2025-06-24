@@ -13,18 +13,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package util
-
-func AnyPtrIsNil(pointers ...any) bool {
-	for _, ptr := range pointers {
-		if ptr == nil {
-			return true
-		}
-	}
-
-	return false
-}
-
-func IgnoreErr[T any](data T, _ error) T {
-	return data
-}
+package statemachineadapter_test
