@@ -22,54 +22,72 @@ import (
 )
 
 var (
-	_ types.StateMachine[any, []any] = &array[any, []any]{}
-	_ stateSetter[[]any]             = &array[any, []any]{}
+	_ types.StateMachine[any, []any] = &array[any]{}
+	_ stateSetter[[]any]             = &array[any]{}
 )
-
-type FilterFunc[T any] func(obj T, entry T) bool
 
 // TODO: How to manage a full write-ahead log?
 // TODO: Add support for capacity (as in "max capacity")
 // TODO: Add support for concurrency
-func NewArray[T any, U []T](
-	filter FilterFunc[T],
-	opts ...option[T, U],
-) (types.StateMachine[T, U], error) {
-	out := &array[T, U]{
-		state:  make(U, 0),
+func NewArray[T any](
+	filter types.FilterFunc[T],
+	opts ...option[T, []T],
+) (types.StateMachine[T, []T], error) {
+	out := &array[T]{
+		state:  make([]T, 0),
 		filter: filter,
 	}
 	return execOptions(out, opts)
 }
 
-type array[T any, U []T] struct {
+type array[T any] struct {
 	state []T
 	// Filter allows updating or deleting an entry by key.
 	// Put and Delete operations are therefore O(n).
-	filter FilterFunc[T]
+	filter types.FilterFunc[T]
 }
 
+/*******************************************************************************
+ * Decode
+ *
+ ******************************************************************************/
+
 // Decode implements types.StateMachine.
-func (stm *array[T, U]) Decode(buf []byte) error {
+func (stm *array[T]) Decode(buf []byte) error {
 	return decodeBinary(buf, stm.state)
 }
 
+/*******************************************************************************
+ * DeepCopy
+ *
+ ******************************************************************************/
+
 // DeepCopy implements types.StateMachine.
-func (stm *array[T, U]) DeepCopy() types.StateMachine[T, U] {
-	return &array[T, U]{
+func (stm *array[T]) DeepCopy() types.StateMachine[T, []T] {
+	return &array[T]{
 		state:  stm.State(),
 		filter: stm.filter,
 	}
 }
 
+/*******************************************************************************
+ * Encode
+ *
+ ******************************************************************************/
+
 // Encode implements types.StateMachine.
-func (stm *array[T, U]) Encode() ([]byte, error) {
+func (stm *array[T]) Encode() ([]byte, error) {
 	return encodeBinary(stm.state)
 }
 
+/*******************************************************************************
+ * Execute
+ *
+ ******************************************************************************/
+
 // Execute implements types.StateMachine.
 // The subject of the verb is always the underlying state of the types.StateMachine.
-func (stm *array[T, U]) Execute(
+func (stm *array[T]) Execute(
 	verb types.StateMachineCommand,
 	obj T,
 ) error {
@@ -86,13 +104,13 @@ func (stm *array[T, U]) Execute(
 	}
 }
 
-func (stm *array[T, U]) executeAppend(obj T) {
+func (stm *array[T]) executeAppend(obj T) {
 	stm.state = append(stm.state, obj)
 }
 
 var ErrOperationRequiresAFilterFunc = errors.New("operation requires a filter func")
 
-func (stm *array[T, U]) executePut(obj T) error {
+func (stm *array[T]) executePut(obj T) error {
 	if stm.filter == nil {
 		return ErrOperationRequiresAFilterFunc
 	}
@@ -104,33 +122,40 @@ func (stm *array[T, U]) executePut(obj T) error {
 	return nil
 }
 
-func (stm *array[T, U]) executeDelete(obj T) error {
+func (stm *array[T]) executeDelete(obj T) error {
 	if stm.filter == nil {
 		return ErrOperationRequiresAFilterFunc
 	}
 	for i, o := range stm.state {
-		if stm.filter(obj, o) {
-			out := make(U, 0)
-			if i != 0 {
-				out = stm.state[0:i]
-			}
-			if i != len(stm.state)-1 {
-				out = append(out, stm.state[i:len(stm.state)-1]...)
-			}
-			stm.state = out
+		if !stm.filter(obj, o) {
+			continue
 		}
+		out := make([]T, 0)
+		if i > 0 {
+			out = stm.state[0:i]
+		}
+		if i < len(stm.state)-1 {
+			out = append(out, stm.state[i+1:]...)
+		}
+		stm.state = out
+		return nil
 	}
-	return nil
+	return types.ErrNotFound
 }
 
+/*******************************************************************************
+ * State
+ *
+ ******************************************************************************/
+
 // State implements types.StateMachine.
-func (stm *array[T, U]) State() U {
-	out := make(U, len(stm.state))
+func (stm *array[T]) State() []T {
+	out := make([]T, len(stm.state))
 	copy(out, stm.state)
 	return out
 }
 
 // setState implements stateSetter.
-func (stm *array[T, U]) setState(state U) {
+func (stm *array[T]) setState(state []T) {
 	stm.state = state
 }

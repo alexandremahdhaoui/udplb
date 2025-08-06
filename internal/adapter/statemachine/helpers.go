@@ -57,7 +57,9 @@ func execOptions[T, U any](
 		return nil, ErrCannotExecuteOptionOntoUnexpectedStateMachine
 	}
 	for _, o := range options {
-		o(sts)
+		if err := o(sts); err != nil {
+			return nil, err
+		}
 	}
 	return stm, nil
 }

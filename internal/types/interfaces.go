@@ -113,6 +113,16 @@ type WAL[T any] interface {
 	Propose(proposal WALEntry[T]) error
 }
 
+// The WAL multiplexer is responsible for passing the right WAL entries to the
+// right WAL interface.
+//
+// WALMux keeps a table that associate a WALId to a WAL[T].
+// It uses that table to find the right WAL interface and decode the RawData into
+// the Data field of a new WALEntry[T].
+type WALMux interface {
+	Register(walId uuid.UUID, v any) (Watcher[any], error)
+}
+
 type RawCluster = Cluster[RawData]
 
 // Cluster does not know anything about consensus or write-ahead logs, it only cares
@@ -135,14 +145,4 @@ type Cluster[T any] interface {
 
 	// We need to be aware of the nodes in the cluster when trying to make a consensus.
 	ListNodes() []uuid.UUID
-}
-
-// The WAL multiplexer is responsible for passing the right WAL entries to the
-// right WAL interface.
-//
-// WALMux keeps a table that associate a WALId to a WAL[T].
-// It uses that table to find the right WAL interface and decode the RawData into
-// the Data field of a new WALEntry[T].
-type WALMux interface {
-	Register(walId uuid.UUID, v any) (Watcher[any], error)
 }
