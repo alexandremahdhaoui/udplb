@@ -25,7 +25,7 @@ import (
 
 var (
 	_ types.StateMachine[types.Assignment, map[uuid.UUID]uuid.UUID] = &hashmap[types.Assignment, uuid.UUID, uuid.UUID]{}
-	_ stateSetter[map[uuid.UUID]struct{}]                           = &hashmap[types.Assignment, uuid.UUID, struct{}]{}
+	_ stateSetter[types.Assignment, map[uuid.UUID]struct{}]         = &hashmap[types.Assignment, uuid.UUID, struct{}]{}
 )
 
 type TransformFunc[E any, K comparable, V any] func(obj E) (K, V, error)
@@ -45,7 +45,7 @@ var ErrTransformFuncMustNotBeNil = errors.New("TransformFunc[E, K, V] must not b
 func NewMap[E any, K comparable, V any](
 	// transformFunc must not lock.
 	transformFunc TransformFunc[E, K, V],
-	opts ...option[E, map[K]V],
+	opts ...Option[E, map[K]V],
 ) (types.StateMachine[E, map[K]V], error) {
 	if transformFunc == nil {
 		return nil, ErrTransformFuncMustNotBeNil

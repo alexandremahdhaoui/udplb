@@ -74,10 +74,11 @@ type Watcher[T any] interface {
 type StateMachineCommand string
 
 const (
-	AddCommand    StateMachineCommand = "Add"
-	AppendCommand StateMachineCommand = "Append"
-	DeleteCommand StateMachineCommand = "Delete"
-	PutCommand    StateMachineCommand = "Put"
+	AddCommand      StateMachineCommand = "Add"
+	AppendCommand   StateMachineCommand = "Append"
+	DeleteCommand   StateMachineCommand = "Delete"
+	PutCommand      StateMachineCommand = "Put"
+	SubtractCommand StateMachineCommand = "Subtract"
 )
 
 var ErrUnsupportedStateMachineCommand = errors.New("unsupported state machine command")

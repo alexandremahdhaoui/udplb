@@ -23,7 +23,7 @@ import (
 
 var (
 	_ types.StateMachine[any, []any] = &array[any]{}
-	_ stateSetter[[]any]             = &array[any]{}
+	_ stateSetter[any, []any]        = &array[any]{}
 )
 
 // TODO: How to manage a full write-ahead log?
@@ -31,7 +31,7 @@ var (
 // TODO: Add support for concurrency
 func NewArray[T any](
 	filter types.FilterFunc[T],
-	opts ...option[T, []T],
+	opts ...Option[T, []T],
 ) (types.StateMachine[T, []T], error) {
 	out := &array[T]{
 		state:  make([]T, 0),

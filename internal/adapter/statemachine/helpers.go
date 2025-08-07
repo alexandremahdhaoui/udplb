@@ -26,12 +26,12 @@ import (
 type (
 	// stateSetter is a helper interface to support setting the internal state
 	// of an abstract state machine.
-	stateSetter[U any] interface{ setState(U) }
-	option[T, U any]   func(stateSetter[U]) error
+	stateSetter[T, U any] interface{ setState(U) }
+	Option[T, U any]      func(stateSetter[T, U]) error
 )
 
-func WithInitialState[T, U any](state U) option[T, U] {
-	return func(m stateSetter[U]) error {
+func WithInitialState[T, U any](state U) Option[T, U] {
+	return func(m stateSetter[T, U]) error {
 		m.setState(state)
 		return nil
 	}
@@ -47,12 +47,12 @@ var ErrCannotExecuteOptionOntoUnexpectedStateMachine = errors.New(
 // It finally returns the stm pointer for convenience.
 func execOptions[T, U any](
 	stm types.StateMachine[T, U],
-	options []option[T, U],
+	options []Option[T, U],
 ) (types.StateMachine[T, U], error) {
 	if len(options) < 1 {
 		return stm, nil
 	}
-	sts, ok := stm.(stateSetter[U])
+	sts, ok := stm.(stateSetter[T, U])
 	if !ok {
 		return nil, ErrCannotExecuteOptionOntoUnexpectedStateMachine
 	}

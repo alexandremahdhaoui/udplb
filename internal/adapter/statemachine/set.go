@@ -23,10 +23,13 @@ import (
 
 var (
 	_ types.StateMachine[uuid.UUID, map[uuid.UUID]struct{}] = &set[uuid.UUID]{}
-	_ stateSetter[map[struct {
-		TestValue  int
-		OnePointer *string
-	}]struct{}] = &set[struct {
+	_ stateSetter[
+		uuid.UUID,
+		map[struct {
+			TestValue  int
+			OnePointer *string
+		}]struct{},
+	] = &set[struct {
 		TestValue  int
 		OnePointer *string
 	}]{}
@@ -34,7 +37,7 @@ var (
 
 func NewSet[T comparable](
 	// transformFunc must not lock.
-	opts ...option[T, map[T]struct{}],
+	opts ...Option[T, map[T]struct{}],
 ) (types.StateMachine[T, map[T]struct{}], error) {
 	out := &set[T]{
 		state: make(map[T]struct{}),
