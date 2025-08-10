@@ -51,6 +51,8 @@ func NewWatcherMux[T any](
 
 type FilterFunc func(v any) bool
 
+var NoFilter FilterFunc = nil
+
 type watcher[T any] struct {
 	ch     chan T
 	doneCh chan struct{}

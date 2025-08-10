@@ -15,9 +15,6 @@
  */
 package types
 
-import "github.com/google/uuid"
+import "errors"
 
-type Assignment struct {
-	BackendId uuid.UUID
-	SessionId uuid.UUID
-}
+var ErrNotFound = errors.New("not found")

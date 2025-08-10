@@ -24,3 +24,7 @@ func AnyPtrIsNil(pointers ...any) bool {
 
 	return false
 }
+
+func IgnoreErr[T any](data T, _ error) T {
+	return data
+}

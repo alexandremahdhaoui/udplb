@@ -366,7 +366,7 @@ func (mgr *dsManager) await(e *event) error {
 // -------------------------------------------------------------------
 
 func (mgr *dsManager) WatchAssignment() (<-chan types.Assignment, func()) {
-	return mgr.assignmentWatcherMux.Watch(nil)
+	return mgr.assignmentWatcherMux.Watch(util.NoFilter)
 }
 
 // -------------------------------------------------------------------

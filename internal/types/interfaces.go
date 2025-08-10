@@ -71,12 +71,26 @@ type Watcher[T any] interface {
 	Watch() (<-chan T, func())
 }
 
+type StateMachineCommand string
+
+const (
+	AddCommand      StateMachineCommand = "Add"
+	AppendCommand   StateMachineCommand = "Append"
+	DeleteCommand   StateMachineCommand = "Delete"
+	PutCommand      StateMachineCommand = "Put"
+	SubtractCommand StateMachineCommand = "Subtract"
+)
+
+var ErrUnsupportedStateMachineCommand = errors.New("unsupported state machine command")
+
 // A StateMachine that can be encoded and decoded.
 type StateMachine[T any, U any] interface {
 	Codec
 
 	// Execute the StateMachine with a `verb` and `data` as input.
-	Execute(verb string, data T)
+	// NB: the subject of the command is always the underlying state
+	// of type U of this types.StateMachine instance.
+	Execute(verb StateMachineCommand, obj T) error
 
 	// State returns the current underlying state of the machine. E.g.:
 	// - For a generic set StateMachine, U is:     map[T]struct{}
@@ -98,6 +112,16 @@ type WAL[T any] interface {
 
 	// Propose a new entry.
 	Propose(proposal WALEntry[T]) error
+}
+
+// The WAL multiplexer is responsible for passing the right WAL entries to the
+// right WAL interface.
+//
+// WALMux keeps a table that associate a WALId to a WAL[T].
+// It uses that table to find the right WAL interface and decode the RawData into
+// the Data field of a new WALEntry[T].
+type WALMux interface {
+	Register(walId uuid.UUID, v any) (Watcher[any], error)
 }
 
 type RawCluster = Cluster[RawData]
@@ -122,14 +146,4 @@ type Cluster[T any] interface {
 
 	// We need to be aware of the nodes in the cluster when trying to make a consensus.
 	ListNodes() []uuid.UUID
-}
-
-// The WAL multiplexer is responsible for passing the right WAL entries to the
-// right WAL interface.
-//
-// WALMux keeps a table that associate a WALId to a WAL[T].
-// It uses that table to find the right WAL interface and decode the RawData into
-// the Data field of a new WALEntry[T].
-type WALMux interface {
-	Register(walId uuid.UUID, v any) (Watcher[any], error)
 }
