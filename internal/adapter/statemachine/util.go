@@ -16,7 +16,7 @@
 package statemachineadapter
 
 import (
-	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"maps"
 
@@ -64,18 +64,12 @@ func execOptions[T, U any](
 	return stm, nil
 }
 
-func encodeBinary[T any](data T) ([]byte, error) {
-	out := make([]byte, 0)
-	_, err := binary.Encode(out, binary.LittleEndian, data)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+func encodeDefault[T any](v T) ([]byte, error) {
+	return json.Marshal(v)
 }
 
-func decodeBinary[T any](buf []byte, data T) error {
-	_, err := binary.Decode(buf, binary.LittleEndian, data)
-	return err
+func decodeDefault[T any](data []byte, v T) error {
+	return json.Unmarshal(data, v)
 }
 
 func copyMap[K comparable, V any](m map[K]V) map[K]V {

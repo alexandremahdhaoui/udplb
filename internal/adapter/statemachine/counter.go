@@ -99,9 +99,14 @@ type counter struct {
 	state          int64
 }
 
+// Encode implements types.StateMachine.
+func (stm *counter) Encode() ([]byte, error) {
+	return encodeDefault(stm.state)
+}
+
 // Decode implements types.StateMachine.
 func (stm *counter) Decode(buf []byte) error {
-	return decodeBinary(buf, stm.state)
+	return decodeDefault(buf, &stm.state)
 }
 
 // DeepCopy implements types.StateMachine.
@@ -126,11 +131,6 @@ func (stm *counter) DeepCopy() types.StateMachine[int64, int64] {
 	return out
 }
 
-// Encode implements types.StateMachine.
-func (stm *counter) Encode() ([]byte, error) {
-	return encodeBinary(stm.state)
-}
-
 var (
 	ErrNoOverflow                  = errors.New("state is not allowed to overflow")
 	ErrNoUnderflow                 = errors.New("state is not allowed to underflow")
@@ -139,12 +139,6 @@ var (
 
 // Execute implements types.StateMachine.
 func (stm *counter) Execute(verb types.StateMachineCommand, obj int64) error {
-	if obj < 0 {
-		return ErrInputMustBeAPositiveInteger
-	}
-	if obj == 0 { // noop
-		return nil
-	}
 	switch verb {
 	default:
 		return types.ErrUnsupportedStateMachineCommand
@@ -156,6 +150,12 @@ func (stm *counter) Execute(verb types.StateMachineCommand, obj int64) error {
 }
 
 func (stm *counter) add(i int64) error {
+	if i < 0 {
+		return ErrInputMustBeAPositiveInteger
+	} else if i == 0 { // noop
+		return nil
+	}
+
 	newState := stm.state + i
 	hasOverflown := newState < stm.state
 	if stm.maxVal != nil && (hasOverflown || stm.state > *stm.maxVal) {
@@ -168,6 +168,12 @@ func (stm *counter) add(i int64) error {
 }
 
 func (stm *counter) subtract(i int64) error {
+	if i < 0 {
+		return ErrInputMustBeAPositiveInteger
+	} else if i == 0 { // noop
+		return nil
+	}
+
 	newState := stm.state - i
 	hasUnderFlown := newState > stm.state
 	if stm.minVal != nil && (hasUnderFlown || stm.state < *stm.minVal) {

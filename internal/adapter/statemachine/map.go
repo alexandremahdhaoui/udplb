@@ -66,7 +66,7 @@ type hashmap[E any, K comparable, V any] struct {
 
 // Decode implements types.StateMachine.
 func (stm *hashmap[E, K, V]) Decode(buf []byte) error {
-	return decodeBinary(buf, stm.state)
+	return decodeDefault(buf, &stm.state)
 }
 
 // DeepCopy implements types.StateMachine.
@@ -79,7 +79,7 @@ func (stm *hashmap[E, K, V]) DeepCopy() types.StateMachine[E, map[K]V] {
 
 // Encode implements types.StateMachine.
 func (stm *hashmap[E, K, V]) Encode() ([]byte, error) {
-	return encodeBinary(stm.state)
+	return encodeDefault(stm.state)
 }
 
 // Execute implements types.StateMachine.

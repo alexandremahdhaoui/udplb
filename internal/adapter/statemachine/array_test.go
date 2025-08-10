@@ -25,8 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const UnsupportedCommand types.StateMachineCommand = "UnsupportedCommand"
-
 // go test -tags=unit ./internal/adapter/statemachine/array_test.go  | sed 's/interface\ {}/any/g' | less
 func TestArray(t *testing.T) {
 	// All state machines implement the same interfaces.
@@ -64,6 +62,7 @@ func TestArray(t *testing.T) {
 		t.Helper()
 		stm, err = statemachineadapter.NewArray(filterFunc)
 		require.NoError(t, err)
+		err = nil
 	}
 
 	/*******************************************************************************
@@ -73,15 +72,26 @@ func TestArray(t *testing.T) {
 	t.Run("Codec", func(t *testing.T) {
 		setup(t)
 
-		// Round trip
-		b0, err := stm.Encode()
-		assert.NoError(t, err)
-		err = stm.Decode(b0)
-		assert.NoError(t, err)
-		b1, err := stm.Encode()
-		assert.NoError(t, err)
-		// must be equal
-		assert.Equal(t, b0, b1)
+		var b0, b1 []byte
+		t.Run("Encode", func(t *testing.T) {
+			b0, err = stm.Encode()
+			assert.NoError(t, err)
+		})
+
+		t.Run("Decode", func(t *testing.T) {
+			err = stm.Decode(b0)
+			assert.NoError(t, err)
+		})
+
+		t.Run("EncodeAgain", func(t *testing.T) {
+			b1, err = stm.Encode()
+			assert.NoError(t, err)
+		})
+
+		t.Run("CheckResult", func(t *testing.T) {
+			// must be equal
+			assert.Equal(t, b0, b1)
+		})
 	})
 
 	/*******************************************************************************
@@ -90,7 +100,7 @@ func TestArray(t *testing.T) {
 	 ******************************************************************************/
 
 	t.Run("Execute", func(t *testing.T) {
-		t.Run("supported", func(t *testing.T) {
+		t.Run("SupportedCommands", func(t *testing.T) {
 			// set it up only once
 			setup(t)
 
@@ -155,7 +165,7 @@ func TestArray(t *testing.T) {
 
 		t.Run("unsupported", func(t *testing.T) {
 			setup(t)
-			err := stm.Execute(UnsupportedCommand, Entry{})
+			err := stm.Execute("UnsupportedCommand", Entry{})
 			assert.ErrorIs(t, err, types.ErrUnsupportedStateMachineCommand)
 		})
 	})
@@ -186,14 +196,14 @@ func TestArray(t *testing.T) {
 	 ******************************************************************************/
 	t.Run("DeepCopy", func(t *testing.T) {
 		opt := statemachineadapter.WithInitialState[uint32]([]uint32{0, 1, 2})
-		inputStm, err := statemachineadapter.NewArray(nil, opt)
+		input, err := statemachineadapter.NewArray(nil, opt)
 		assert.NoError(t, err)
 
 		// -- State are equal
-		actual0 := inputStm.DeepCopy()
-		actual1 := inputStm.DeepCopy()
-		assert.Equal(t, inputStm, actual0)
-		assert.Equal(t, inputStm, actual1)
+		actual0 := input.DeepCopy()
+		actual1 := input.DeepCopy()
+		assert.Equal(t, input, actual0)
+		assert.Equal(t, input, actual1)
 
 		// -- States are mutually immutable
 		err = actual0.Execute(types.AppendCommand, 3)
@@ -202,7 +212,7 @@ func TestArray(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.NotEqual(t, actual0.State(), actual1.State())
-		assert.NotEqual(t, inputStm.State(), actual0.State())
-		assert.NotEqual(t, inputStm.State(), actual1.State())
+		assert.NotEqual(t, input.State(), actual0.State())
+		assert.NotEqual(t, input.State(), actual1.State())
 	})
 }

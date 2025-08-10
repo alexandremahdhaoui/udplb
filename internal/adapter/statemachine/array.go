@@ -54,7 +54,7 @@ type array[T any] struct {
 
 // Decode implements types.StateMachine.
 func (stm *array[T]) Decode(buf []byte) error {
-	return decodeBinary(buf, stm.state)
+	return decodeDefault(buf, &stm.state)
 }
 
 /*******************************************************************************
@@ -77,7 +77,7 @@ func (stm *array[T]) DeepCopy() types.StateMachine[T, []T] {
 
 // Encode implements types.StateMachine.
 func (stm *array[T]) Encode() ([]byte, error) {
-	return encodeBinary(stm.state)
+	return encodeDefault(stm.state)
 }
 
 /*******************************************************************************

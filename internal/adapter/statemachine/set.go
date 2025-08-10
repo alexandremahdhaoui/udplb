@@ -53,7 +53,7 @@ type set[T comparable] struct {
 
 // Decode implements types.StateMachine.
 func (stm *set[T]) Decode(buf []byte) error {
-	return decodeBinary(buf, stm.state)
+	return decodeDefault(buf, &stm.state)
 }
 
 // DeepCopy implements types.StateMachine.
@@ -65,7 +65,7 @@ func (stm *set[T]) DeepCopy() types.StateMachine[T, map[T]struct{}] {
 
 // Encode implements types.StateMachine.
 func (stm *set[T]) Encode() ([]byte, error) {
-	return encodeBinary(stm.state)
+	return encodeDefault(stm.state)
 }
 
 // Execute implements types.StateMachine.

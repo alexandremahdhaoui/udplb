@@ -17,6 +17,7 @@ package statemachineadapter_test
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	statemachineadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/statemachine"
@@ -26,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// go test -tags=unit ./internal/adapter/statemachine/array_test.go  | sed 's/interface\ {}/any/g' | less
+// go test -tags=unit ./internal/adapter/statemachine/counter_test.go  | sed 's/interface\ {}/any/g' | less
 func TestCounter(t *testing.T) {
 	type opt = statemachineadapter.Option[int64, int64]
 
@@ -44,16 +45,15 @@ func TestCounter(t *testing.T) {
 	 ******************************************************************************/
 
 	var (
-		err  error
-		stm  types.StateMachine[int64, int64]
-		opts []opt
+		err error
+		stm types.StateMachine[int64, int64]
 	)
 
 	/*******************************************************************************
 	 * setup
 	 *
 	 ******************************************************************************/
-	setup := func(t *testing.T) {
+	setup := func(t *testing.T, opts []opt) {
 		t.Helper()
 		stm, err = statemachineadapter.NewCounter(opts...)
 		require.NoError(t, err)
@@ -64,17 +64,28 @@ func TestCounter(t *testing.T) {
 	 *
 	 ******************************************************************************/
 	t.Run("Codec", func(t *testing.T) {
-		setup(t)
+		setup(t, []opt{statemachineadapter.WithInitialState[int64, int64](0x1337)})
 
-		// Round trip
-		b0, err := stm.Encode()
-		assert.NoError(t, err)
-		err = stm.Decode(b0)
-		assert.NoError(t, err)
-		b1, err := stm.Encode()
-		assert.NoError(t, err)
-		// must be equal
-		assert.Equal(t, b0, b1)
+		var b0, b1 []byte
+		t.Run("Encode", func(t *testing.T) {
+			b0, err = stm.Encode()
+			assert.NoError(t, err)
+		})
+
+		t.Run("Decode", func(t *testing.T) {
+			err = stm.Decode(b0)
+			assert.NoError(t, err)
+		})
+
+		t.Run("EncodeAgain", func(t *testing.T) {
+			b1, err = stm.Encode()
+			assert.NoError(t, err)
+		})
+
+		t.Run("CheckResult", func(t *testing.T) {
+			// must be equal
+			assert.Equal(t, b0, b1)
+		})
 	})
 
 	/*******************************************************************************
@@ -83,124 +94,105 @@ func TestCounter(t *testing.T) {
 	 ******************************************************************************/
 
 	t.Run("Execute", func(t *testing.T) {
-		// TODO:
-		// Test cases:
-		// 1. no options
-		// 2. allow overflow
-		// 3. set min and max value
-		cases := []struct {
-			Name    string
-			Options []opt
-		}{
-			{
-				Name:    "NoOptions",
-				Options: nil,
-			},
-
-			{
-				Name:    "AllowOverflow",
-				Options: []opt{statemachineadapter.CounterWithAllowOverflow()},
-			},
-
-			{
-				Name: "WithMinAndMaxVal",
-				Options: []opt{
-					statemachineadapter.CounterWithMaximumValue(5),
-					statemachineadapter.CounterWithMinimumValue(-5),
-				},
-			},
-		}
+		add := types.AddCommand
+		sub := types.SubtractCommand
 
 		t.Run("BasicOperations", func(t *testing.T) {
-			// TODO:
-			// test struct:
-			// - forceOverflowVal
-			// - forceOverflowErr
-			// - forceUnderflowVal
-			// - forceUnderflowErr
-			commandSequence := []struct {
-				Command types.StateMachineCommand
-				Input   int64
+			sequence := []struct {
+				Name          string
+				Options       []opt
+				Commands      [7]types.StateMachineCommand
+				Inputs        [7]int64
+				ExpectedErrs  [7]error
+				ExpectedState [7]int64
 			}{
-				// -- Add 0: noop
 				{
-					Command: types.AddCommand,
-					Input:   0,
+					Name:    "NoOptions",
+					Options: nil,
+					Commands: [7]types.StateMachineCommand{
+						add, add, sub, add, add, sub, sub,
+					},
+					Inputs: [7]int64{
+						0, 1, 2, 6, math.MaxInt64, 10, math.MaxInt64,
+					},
+					ExpectedErrs: [7]error{
+						nil, nil, nil, nil, statemachineadapter.ErrNoOverflow, nil, statemachineadapter.ErrNoUnderflow,
+					},
+					ExpectedState: [7]int64{
+						0, 1, -1, 5, 5, -5, -5,
+					},
 				},
 
-				// -- Add 1:       state=1
 				{
-					Command: types.AddCommand,
-					Input:   1,
+					Name:    "AllowOverflow",
+					Options: []opt{statemachineadapter.CounterWithAllowOverflow()},
+					Commands: [7]types.StateMachineCommand{
+						add, add, add, sub, sub, sub, add,
+					},
+					Inputs: [7]int64{
+						5, math.MaxInt64, math.MaxInt64 - 8, math.MaxInt64, math.MaxInt64 - 3, 0, 0,
+					},
+					ExpectedErrs: [7]error{},
+					ExpectedState: [7]int64{
+						5, math.MinInt64 + 4, -5, math.MaxInt64 - 3, 0, 0,
+					},
 				},
 
-				// -- Subtract 3:  state=-2
 				{
-					Command: types.SubtractCommand,
-					Input:   3,
-				},
-
-				// TODO: Run this in a different test block to reset state
-				// -- force overflow
-				// -- add(3),add(math.MaxInt64)
-				{
-					Command: types.AddCommand,
-					Input:   3,
-				},
-				{
-					Command: types.AddCommand,
-					Input:   math.MaxInt64,
-				},
-
-				// TODO: Run this in a different test block to reset state
-				// -- force underflow
-				// -- sub(2),sub(math.MaxInt64)
-				{
-					Command: types.SubtractCommand,
-					Input:   2,
-				},
-				{
-					Command: types.SubtractCommand,
-					Input:   math.MaxInt64,
+					Name: "WithMinAndMaxVal",
+					Options: []opt{
+						statemachineadapter.CounterWithMaximumValue(5),
+						statemachineadapter.CounterWithMinimumValue(-5),
+					},
+					Commands: [7]types.StateMachineCommand{
+						add, add, sub, add, add, sub, sub,
+					},
+					Inputs: [7]int64{
+						0, 1, 2, 6, math.MaxInt64, 10, math.MaxInt64,
+					},
+					ExpectedErrs: [7]error{},
+					ExpectedState: [7]int64{
+						0, 1, -1, 5, 5, -5, -5,
+					},
 				},
 			}
 
-			// set it up only once
-			setup(t)
+			for _, spec := range sequence {
+				t.Run(string(spec.Name), func(t *testing.T) {
+					// set it up only once
+					setup(t, spec.Options)
 
-			for _, cmd := range []struct {
-				Name            types.StateMachineCommand
-				Input           int64
-				CheckSideEffect func(t *testing.T, input int64)
-			}{
-				{
-					Name:  types.AddCommand,
-					Input: 0,
-					CheckSideEffect: func(t *testing.T, input int64) {
-						state := stm.State()
-						assert.Equal(t, 0, state)
-					},
-				},
-			} {
-				t.Run(string(cmd.Name), func(t *testing.T) {
-					err := stm.Execute(cmd.Name, cmd.Input)
+					for i := range 7 {
+						t.Run(strconv.Itoa(i), func(t *testing.T) {
+							command := spec.Commands[i]
+							input := spec.Inputs[i]
+							expectedErr := spec.ExpectedErrs[i]
+							expectedState := spec.ExpectedState[i]
 
-					// or
-					assert.ErrorIs(t, nil, err)
-					assert.NoError(t, err)
+							err := stm.Execute(command, input)
+							if expectedErr != nil {
+								assert.ErrorIs(t, err, expectedErr)
+							} else {
+								assert.NoError(t, err)
+							}
 
-					cmd.CheckSideEffect(t, cmd.Input)
+							assert.Equal(t, expectedState, stm.State())
+						})
+					}
 				})
 			}
 		})
 
-		t.Run("overflow", func(t *testing.T) {})
-		t.Run("underflow", func(t *testing.T) {})
-
-		t.Run("unsupported commands", func(t *testing.T) {
-			setup(t)
-			err := stm.Execute(UnsupportedCommand, 0)
+		t.Run("UnsupportedCommand", func(t *testing.T) {
+			setup(t, nil)
+			err := stm.Execute("UnsupportedCommand", 0)
 			assert.ErrorIs(t, err, types.ErrUnsupportedStateMachineCommand)
+		})
+
+		t.Run("ErrInputMustBeAPositiveInteger", func(t *testing.T) {
+			setup(t, nil)
+			err := stm.Execute(types.AddCommand, -1)
+			assert.ErrorIs(t, err, statemachineadapter.ErrInputMustBeAPositiveInteger)
 		})
 	})
 
@@ -230,14 +222,14 @@ func TestCounter(t *testing.T) {
 	 ******************************************************************************/
 	t.Run("DeepCopy", func(t *testing.T) {
 		opt := statemachineadapter.WithInitialState[uint32]([]uint32{0, 1, 2})
-		inputStm, err := statemachineadapter.NewArray(nil, opt)
+		input, err := statemachineadapter.NewArray(nil, opt)
 		assert.NoError(t, err)
 
 		// -- State are equal
-		actual0 := inputStm.DeepCopy()
-		actual1 := inputStm.DeepCopy()
-		assert.Equal(t, inputStm, actual0)
-		assert.Equal(t, inputStm, actual1)
+		actual0 := input.DeepCopy()
+		actual1 := input.DeepCopy()
+		assert.Equal(t, input, actual0)
+		assert.Equal(t, input, actual1)
 
 		// -- States are mutually immutable
 		err = actual0.Execute(types.AppendCommand, 3)
@@ -246,7 +238,7 @@ func TestCounter(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.NotEqual(t, actual0.State(), actual1.State())
-		assert.NotEqual(t, inputStm.State(), actual0.State())
-		assert.NotEqual(t, inputStm.State(), actual1.State())
+		assert.NotEqual(t, input.State(), actual0.State())
+		assert.NotEqual(t, input.State(), actual1.State())
 	})
 }
