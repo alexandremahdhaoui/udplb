@@ -1,9 +1,18 @@
 ---
 TODOs:
-  - |
-    Document the different kinds of notification pathways b/w loadbalancer.
-    I.e. the fast "autocrine/paracrine" UDP pathway,
-    and the slower but regulated "endocrine" WAL-based pathway.
+  - CRITICAL: |
+      Ensure that all controller loop instances disallow concurrent runs.
+
+      In other words, the control loop can only be started when it's not
+      already running.
+
+  - Check if not already done: |
+      Document the different kinds of notification pathways b/w loadbalancer.
+
+      I.e. the fast "autocrine/paracrine" UDP pathway, and the slower but
+      regulated "endocrine" WAL-based pathway.
+
   - Implement internal/adapter/cluster.
-  - Implement internal/controller/dvds.
   - Implement internal/adapter/monitor.
+  - Implement internal/adapter/wal.
+  - Implement internal/controller/dvds.
