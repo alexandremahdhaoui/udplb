@@ -1,0 +1,11 @@
+---
+filename: "zz_generated.{{ .InterfaceName }}.go"
+# with-expecter: true
+
+packages:
+  # -- internal/types
+  github.com/alexandremahdhaoui/udplb/internal/types:
+    config:
+      all: true
+      dir: internal/util/mocks/mocktypes
+      # outpkg: mocktypes

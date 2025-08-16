@@ -24,36 +24,40 @@ import (
 )
 
 /*******************************************************************************
- * Interface
+ * New
  *
  ******************************************************************************/
 
-// DVDS or Distributed Volatile Data Structure is a controller that consent with a
-// cluster of nodes about a consistent state of a given data structure U.
-//
-// NB: this is maybe a bad implementation and the WAL should be streamed to the state
-// machine. But this implementation ensures the state is fetched from other nodes on
-// restart and that the WAL is properly purged etc...
-type DVDS[T any, U any] interface {
-	types.Runnable
-	types.Watcher[U]
-
-	// Propose a new data entry.
-	Propose(proposal T) error
+// - T is the type of the data field of a write-ahead log entry.
+// - U is the representation of the internal state of the state machine executing the
+// Write-Ahead Log.
+func New[T any, U any](
+	stateMachine types.StateMachine[T, U],
+	wal types.WAL[T],
+	watcherMux *util.WatcherMux[U],
+) types.DVDS[T, U] {
+	return &dvds[T, U]{
+		stateMachine: stateMachine,
+		lastCommit:   types.Hash{},
+		wal:          wal,
+		watcherMux:   watcherMux,
+		doneCh:       make(chan struct{}),
+		terminateCh:  make(chan struct{}),
+	}
 }
 
 /*******************************************************************************
- * Concrete implementation
+ * dvds
  *
  ******************************************************************************/
 
 type dvds[T any, U any] struct {
+	// -- State
 	stateMachine types.StateMachine[T, U]
+	lastCommit   types.Hash
 
 	// -- WAL
-	cmdWAL types.WAL[T]
-	// Raw snapshot that can be used to initialize a new state machine.
-	snapshotWAL types.WAL[U]
+	wal types.WAL[T]
 
 	// -- WatcherMux
 	watcherMux *util.WatcherMux[U]
@@ -64,56 +68,29 @@ type dvds[T any, U any] struct {
 }
 
 /*******************************************************************************
- * New
- *
- ******************************************************************************/
-
-// - T is the type of the data field of a write-ahead log entry.
-// - U is the representation of the internal state of the state machine executing the
-// Write-Ahead Log.
-func New[T any, U any](
-	stateMachine types.StateMachine[T, U],
-	watcherMux *util.WatcherMux[U],
-) DVDS[T, U] {
-	return &dvds[T, U]{
-		stateMachine: stateMachine,
-		cmdWAL:       nil,
-		snapshotWAL:  nil,
-		watcherMux:   watcherMux,
-		doneCh:       make(chan struct{}),
-		terminateCh:  make(chan struct{}),
-	}
-}
-
-/*******************************************************************************
  * Propose
  *
  ******************************************************************************/
 
 // Propose implements types.WAL.
-func (ds *dvds[T, U]) Propose(proposal T) error {
-	// TODO: how?
+func (ds *dvds[T, U]) Propose(key string, command types.StateMachineCommand, obj T) error {
+	// TODO: Implement types.NewWALEntry() that computes the Hash
 	entry := types.WALEntry[T]{
-		Key:          "",
-		Data:         proposal,
-		Timestamp:    time.Time{},
-		WALName:      "",
-		ProposalHash: [32]byte{},
-		PreviousHash: [32]byte{},
-		Hash:         [32]byte{},
+		Hash:         types.Hash{}, // TODO:
+		PreviousHash: ds.lastCommit,
+		NextHash:     types.Hash{},
+		Timestamp:    time.Now(),
+		WALId:        "", // TODO:
+		Key:          key,
+		Command:      command,
+		Object:       obj,
 	}
-	return ds.cmdWAL.Propose(entry)
-}
 
-/*******************************************************************************
- * types.Watcher
- *
- ******************************************************************************/
-
-// Watch will return a representation of the underlying state as soon as the
-// state machine is mutated.
-func (ds *dvds[T, U]) Watch() (<-chan U, func()) {
-	return ds.watcherMux.Watch(util.NoFilter)
+	// Initially the goal was to execute the proposal and commit it to the dvds,
+	// but we won't be doing that (WAL.Propose() is non-blocking).
+	// Once a proposed value is accepted, the WAL sends an udpate and the value
+	// will be eventually committed.
+	return ds.wal.Propose(entry)
 }
 
 /*******************************************************************************
@@ -123,7 +100,65 @@ func (ds *dvds[T, U]) Watch() (<-chan U, func()) {
 
 // Run implements types.WAL.
 func (ds *dvds[T, U]) Run(ctx context.Context) error {
+	if err := ds.wal.Run(ctx); err != nil { // TODO: wrap ctx
+		return err
+	}
+
+	ch, cancel := ds.wal.Watch()
+	for {
+		select {
+		case <-ds.terminateCh:
+			cancel()
+			close(ds.doneCh)
+		case wal := <-ch:
+			switch {
+			default:
+				if err := ds.replayWAL(wal); err != nil {
+					panic(err) // TODO: Handle error
+				}
+			case ds.lastCommit == wal.TailHash():
+				continue // Nothing to do
+			case !wal.Contains(ds.lastCommit):
+				// Case where the dvds last commit is below the WAL's low watermark.
+				// In other words, this case happen if:
+				// - This node was not able to commit for a while and diverged.
+				// - This node is joining the cluster.
+				if err := ds.init(); err != nil {
+					panic(err) // TODO: Handle error
+				}
+			}
+
+		}
+	}
+}
+
+func (ds *dvds[T, U]) init() error {
+	// TODO: implement me
 	panic("unimplemented")
+}
+
+func (ds *dvds[T, U]) replayWAL(ll types.WalLinkedList[T]) error {
+	prev, err := ll.Get(ds.lastCommit)
+	if err != nil {
+		return err
+	}
+
+	// play the wal until we reach the tail
+	for prev.Hash != ll.TailHash() {
+		curr, err := ll.GetNext(prev.Hash)
+		if err != nil {
+			return err
+		}
+
+		if err := ds.stateMachine.Execute(curr.Command, curr.Object); err != nil {
+			return err
+		}
+
+		ds.lastCommit = curr.Hash
+		prev = curr
+	}
+
+	return nil
 }
 
 /*******************************************************************************
@@ -145,4 +180,15 @@ func (ds *dvds[T, U]) Close() error {
 // Done implements types.WAL.
 func (ds *dvds[T, U]) Done() <-chan struct{} {
 	return ds.doneCh
+}
+
+/*******************************************************************************
+ * types.Watcher
+ *
+ ******************************************************************************/
+
+// Watch will return a representation of the underlying state as soon as the
+// state machine is mutated.
+func (ds *dvds[T, U]) Watch() (<-chan U, func()) {
+	return ds.watcherMux.Watch(util.NoFilter)
 }

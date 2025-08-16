@@ -81,20 +81,9 @@ generate: $(PROTO_FILES:.proto=.pb.go) ## Generate REST API server/client code, 
 	# $(OAPI_CODEGEN_HELPER)
 	GOPACKAGE=bpf $(BPF2GO) $(BPF2GO_OPTS) $(PROJECT) $(BPF_FILE)
 	$(GO_GEN) "./..."
-	#
-	# $(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
-	# $(CONTROLLER_GEN) paths="./..." \
-	# 	crd:generateEmbeddedObjectMeta=true \
-	# 	output:crd:artifacts:config=charts/$(PROJECT)/templates/crds
-	#
-	# $(CONTROLLER_GEN) paths="./..." \
-	# 	rbac:roleName=$(PROJECT) \
-	# 	webhook \
-	# 	output:rbac:dir=charts/$(PROJECT)/templates/rbac \
-	# 	output:webhook:dir=charts/$(PROJECT)/templates/webhook
-	#
-	# $(CLEAN_MOCKS)
-	# $(MOCKERY)
+	
+	$(CLEAN_MOCKS)
+	$(MOCKERY)
 
 # ------------------------------------------------------------------------------------------------------------- #
 # -- FORMAT

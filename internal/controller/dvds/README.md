@@ -20,7 +20,7 @@ consistency. Thus, when watching a `dvds` the observer will obtain the whole new
 state of the data structure at once. This allow a stateless usage, or in other
 words the observer won't have to maintain a duplicate state of the data structure.
 
-The downsides are increased allocations and O(1) data duplication. To address
+The downsides are increased allocations and constant data duplication. To address
 these inconveniences the user can choose to shard their data structures if they
 become too large.
 

@@ -18,3 +18,10 @@ package types
 import "errors"
 
 var ErrNotFound = errors.New("not found")
+
+var ( // Runnable
+	ErrAlreadyClosed                   = errors.New("trying to close an already closed interface")
+	ErrAlreadyRunning                  = errors.New("trying to run an already running interface")
+	ErrCannotRunClosedRunnable         = errors.New("cannot run a closed runnable")
+	ErrRunnableMustBeRunningToBeClosed = errors.New("runnable must be running to be closed")
+)

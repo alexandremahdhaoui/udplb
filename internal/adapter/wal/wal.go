@@ -17,7 +17,6 @@ package waladapter
 
 import (
 	"context"
-	"time"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -103,7 +102,7 @@ type wal[T any] struct {
 	terminateCh chan struct{}
 
 	// -- WatcherMux
-	watcherMux *util.WatcherMux[[]T]
+	watcherMux *util.WatcherMux[types.WalLinkedList[T]]
 }
 
 /*******************************************************************************
@@ -117,7 +116,7 @@ func New[T any](
 	name string,
 	cluster types.Cluster[T],
 	capacity uint,
-	watcherMux *util.WatcherMux[[]T],
+	watcherMux *util.WatcherMux[types.WalLinkedList[T]],
 ) types.WAL[T] {
 	return &wal[T]{
 		name:           name,
@@ -136,17 +135,10 @@ func New[T any](
  ******************************************************************************/
 
 // Propose implements types.WAL.
-func (w *wal[T]) Propose(proposal types.WALEntry[T]) error {
+func (w *wal[T]) Propose(entry types.WALEntry[T]) error {
 	// TODO: add the WALId to the proposal.
-	proposal.WALName = w.name
-	types.WALEntry[T]{
-		Key:       "",
-		Data:      *new(T),
-		Timestamp: time.Now(),
-		WALName:   "",
-	}
-
-	w.proposalBuffer.Write(proposal)
+	entry.WALId = w.name
+	w.proposalBuffer.Write(entry)
 	return nil
 }
 
@@ -157,8 +149,8 @@ func (w *wal[T]) Propose(proposal types.WALEntry[T]) error {
 
 // Watch will return a channel sending representation of the underlying state
 // as soon it changes.
-func (w *wal[T]) Watch() (<-chan []T, error) {
-	return w.watcherMux.Watch(), nil
+func (w *wal[T]) Watch() (<-chan types.WalLinkedList[T], func()) {
+	return w.watcherMux.Watch(nil)
 }
 
 /*******************************************************************************
