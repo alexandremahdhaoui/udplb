@@ -16,6 +16,8 @@
 package types
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"time"
 
@@ -102,12 +104,43 @@ func (s WalLinkedList[T]) Contains(hash Hash) bool {
 	return ok
 }
 
+func NewWALEntry[T any](
+	previousHash Hash,
+	key string,
+	command StateMachineCommand,
+	obj T,
+) (WALEntry[T], error) {
+	out := WALEntry[T]{
+		PreviousHash: previousHash,
+		Timestamp:    time.Now(),
+		Key:          key,
+		Command:      command,
+		Object:       obj,
+
+		// Field that MUST NOT be set before computing hash.
+		Hash:     Hash{},
+		NextHash: Hash{},
+		WALId:    "", // TODO:
+	}
+
+	buf := make([]byte, 0)
+	if _, err := binary.Encode(buf, binary.LittleEndian, out); err != nil {
+		return WALEntry[T]{}, nil
+	}
+	out.Hash = sha256.Sum256(buf)
+
+	return out, nil
+}
+
 type WALEntry[T any] struct {
 	// Hash of this WAL entry.
+	// Obviously: it MUST NOT participate to the hash of this entry.
 	Hash Hash
 	// Hash of the previous entry in the WAL.
 	PreviousHash Hash
 	// Hash of the next entry in the WAL.
+	// NOTE: NextHash MUST NOT participate to the hash of this entry.
+	// NextHash's purposes is to build a linked list.
 	NextHash Hash
 
 	// The timestamp ensures the proposed entries are consented in the right
@@ -118,6 +151,8 @@ type WALEntry[T any] struct {
 	// WALId is the Id of a WAL. This Id serves the purpose of looking up the actual
 	// type T. This type is then use to decode `types.RawWALProposal.Data` by a
 	// multiplexer.
+	// NOTE: WALId MUST NOT participate to the hash of this entry.
+	// This is a helper field
 	WALId string
 
 	// The key ensures that duplicated proposals from 2 or more nodes does not

@@ -160,8 +160,83 @@ func (w *wal[T]) Watch() (<-chan types.WalLinkedList[T], func()) {
 
 // Run implements types.WAL.
 func (w *wal[T]) Run(ctx context.Context) error {
-	panic("unimplemented")
+	proposalCh := make(chan (types.WALEntry[T]), 5) // TODO: this buffer value is random
+	go func() {
+		for {
+			proposalCh <- w.proposalBuffer.Next()
+		}
+	}()
+
+	// Fast multi master WAL algorithm:
+	// - A generation is made of 3 phases: proposal, acceptance and deliberation.
+	// - Any nodes CAN make a proposal during the proposal phase.
+	// - All nodes MUST accept EXACTLY one proposal during the acceptance phase.
+	//
+	// START NEW GENERATION: (g=0)
+	// 1. Node(x): Propose(y). Identified by a hash
+	// 2. Node(others): Accept(y). Identified by Hash+PreviousHash.
+	// 3. IF a majority of "Accept(y)" messages have equal Hash+PreviousHash,
+	//    THEN this entry is added to the WAL.
+	// DONE
+	//
+	// 3. ELSE no majority, e.g. different proposal came at the same time, and
+	//    nodes sent different Accept messages.
+	//    THEN terminate and start a new generation (g=1).
+	// DONE
+	//
+	// START NEW GENERATION: (g=1)
+	// 0. Use deterministic algorithm based on previous results to ensure
+	//    convergence.
+	// 1. Some nodes start to propose again.
+	// 2. Nodes based on the deterministic algorithm in 0.: accept a proposal.
+	//    Please note that IF none of the proposal in g=1 is equal to a proposal
+	//    made in g=0; THEN the algorithm is not guarranted to converge.
+	// 3. CONVERGENCE or terminate and start new generation.
+	// DONE
+	//
+	// Complexity calculation in a fully connected cluster topology:
+	// - Let `n` the number of nodes in the cluster.
+	// - Let `c(n)` a function that associate the number of nodes
+	//   to the number of messages sent during phase 1 and 2.
+	// - The time complexity O(n) is of order `c(n)`.
+	// - During phase 1: up to `n` nodes CAN make a proposal to `n-1` nodes:
+	//   phase1(n): n*(n-1) messages.
+	// - During phase 2: `n` nodes MUST accept a proposal and communicate that
+	//   information to `n-1` nodes: n*(n-1).
+	// - THUS c(n): 2n*(n-1).
+	// The time complexity O(n) of the fully connected cluster topology is
+	// quadratic: O(n): n^2.
+	//
+	// Complexity calculation in a leader based cluster topology:
+	// - In a leader based approach, there are 4 phases: 1.a. 1.b. 2.a. 2.b.
+	// - All phases creates `(n-1)` messages.
+	// - The time complexity is O(n).
+	// => Worth from 5 nodes upwards. For 3 nodes, it's almost similar.
+	//
+	// Protocol of leader based approach:
+	// 1.a.: every node can make a proposal and send it to the leader. (n-1)
+	// 1.b.: leader redistributes proposal messages to all followers. (n-1)
+	// 2.a.: every node accept a proposal and send it to the leader. (n-1)
+	// 2.b.: leader redistributes acceptance messages to all followers (n-1)
+	// DONE
+	//
+	// NB: the leader-based approach requires electing a leader. This can be done on
+	// the data exchange layer (i.e. the types.Cluster[T]).
+	// Also, instead of electing a leader one could be deterministically choosen
+	// using a hash table of available leaders and a modulo of the generation number.
+
+	for {
+		select {
+		case entry := <-proposalCh:
+			w.cluster.Send()
+			// TODO:
+		case <-w.terminateCh:
+			// TODO:
+		}
+	}
 }
+
+func (w *wal[T]) runGeneration() {}
 
 /*******************************************************************************
  * types.DoneCloser

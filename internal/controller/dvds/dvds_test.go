@@ -1,3 +1,5 @@
+//go:build unit
+
 /*
  * Copyright 2025 Alexandre Mahdhaoui
  *
@@ -18,26 +20,40 @@ package dvds_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	dvdscontroller "github.com/alexandremahdhaoui/udplb/internal/controller/dvds"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
+	"github.com/alexandremahdhaoui/udplb/internal/util/mocks/mocktypes"
+
 	"github.com/stretchr/testify/assert"
 )
 
 func TestDVDS(t *testing.T) {
+	type (
+		T = int
+		U = map[T]string
+	)
+
 	var (
 		ctx context.Context
 
-		dvds types.DVDS[int, map[int]string]
+		dvds types.DVDS[T, U]
 
-		stm        types.StateMachine[int, map[int]string]
-		wal        types.WAL[int]
-		watcherMux *util.WatcherMux[map[int]string]
+		stm        types.StateMachine[T, U]
+		wal        types.WAL[T]
+		watcherMux *util.WatcherMux[U]
 	)
 
 	setup := func(t *testing.T) {
+		t.Helper()
+
 		ctx = context.Background()
+		stm = mocktypes.NewMockStateMachine[T, U](t)
+		wal = mocktypes.NewMockWAL[T](t)
+		watcherMux = util.NewWatcherMux(5, util.NewDispatchFuncWithTimeout[U](1*time.Second))
+
 		dvds = dvdscontroller.New(
 			stm,
 			wal,

@@ -17,7 +17,6 @@ package dvds
 
 import (
 	"context"
-	"time"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -38,11 +37,15 @@ func New[T any, U any](
 ) types.DVDS[T, U] {
 	return &dvds[T, U]{
 		stateMachine: stateMachine,
-		lastCommit:   types.Hash{},
 		wal:          wal,
 		watcherMux:   watcherMux,
 		doneCh:       make(chan struct{}),
 		terminateCh:  make(chan struct{}),
+
+		// -- unset fields
+		lastCommit:      types.Hash{},
+		stateHash:       types.Hash{},
+		stateHashCommit: types.Hash{},
 	}
 }
 
@@ -56,6 +59,15 @@ type dvds[T any, U any] struct {
 	stateMachine types.StateMachine[T, U]
 	lastCommit   types.Hash
 
+	// -- State Hash
+	// IF !wal.Contains(stateHashCommit)
+	// - Compute stateHash on lastCommit
+	// - Update stateHashCommit
+	// \-> The above operations may not require locking if we ensure .Run() only
+	//     allows a maximum concurrency of 1.
+	stateHash       types.Hash
+	stateHashCommit types.Hash
+
 	// -- WAL
 	wal types.WAL[T]
 
@@ -67,6 +79,15 @@ type dvds[T any, U any] struct {
 	terminateCh chan struct{}
 }
 
+// TODO:
+// - How should init() be implemented?
+// - How does dvds request for the whole state U on init/re-init?
+// - How does dvds check for data consistency of U?
+//     -> Compute its hash?
+//     -> How often can the hash be computed?
+// - How does dvds react to data inconsistency of U?
+// - How does dvds send its state U?
+
 /*******************************************************************************
  * Propose
  *
@@ -75,15 +96,9 @@ type dvds[T any, U any] struct {
 // Propose implements types.WAL.
 func (ds *dvds[T, U]) Propose(key string, command types.StateMachineCommand, obj T) error {
 	// TODO: Implement types.NewWALEntry() that computes the Hash
-	entry := types.WALEntry[T]{
-		Hash:         types.Hash{}, // TODO:
-		PreviousHash: ds.lastCommit,
-		NextHash:     types.Hash{},
-		Timestamp:    time.Now(),
-		WALId:        "", // TODO:
-		Key:          key,
-		Command:      command,
-		Object:       obj,
+	entry, err := types.NewWALEntry(ds.lastCommit, key, command, obj)
+	if err != nil {
+		return err
 	}
 
 	// Initially the goal was to execute the proposal and commit it to the dvds,
@@ -100,7 +115,8 @@ func (ds *dvds[T, U]) Propose(key string, command types.StateMachineCommand, obj
 
 // Run implements types.WAL.
 func (ds *dvds[T, U]) Run(ctx context.Context) error {
-	if err := ds.wal.Run(ctx); err != nil { // TODO: wrap ctx
+	// TODO: wrap ctx
+	if err := ds.wal.Run(ctx); err != nil {
 		return err
 	}
 

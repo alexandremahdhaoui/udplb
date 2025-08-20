@@ -33,10 +33,10 @@ type Cluster[T any] interface {
 	Runnable
 
 	Send(ch <-chan T) error
-	// needs to multiplex the chan so multiple subsystem can use receive the same stream
+	// needs to multiplex the chan so multiple subsystem can receive the same stream
 	// of messages from the cluster.
 	// The returned cancel function can be used to stop receiving.
-	Recv() (<-chan T, func())
+	Recv() (<-chan T, func()) // this is basically types.Watcher[T]
 
 	// Join a cluster. Advertise itself and discover other nodes.
 	Join() error

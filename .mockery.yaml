@@ -1,6 +1,8 @@
 ---
 filename: "zz_generated.{{ .InterfaceName }}.go"
-# with-expecter: true
+pkgname: 'mock{{.SrcPackageName}}'
+template-data:
+  boilerplate-file: ./hack/boilerplate.txt
 
 packages:
   # -- internal/types
