@@ -30,6 +30,7 @@ describing why we need this loadbalancer.
 ## Backend UDP Server capacity
 
 An UDP server has 2 scalability axis:
+
 - Rate of UDP packet/second.
 - Number of opened backend GRPC cnx.
 
@@ -47,12 +48,14 @@ Q: How is backend capactity data synced b/w each loadbalancers.
 ## Specification
 
 **`MUST`**
+
 - In any case a packet MUST not be forwarded to the wrong backend.
   (this would end up creating a new GRPC cnx to the gameproc server.)
 - "Subsequent" packets MUST NOT be subject to locking
 - "Subsequent" packets MUST be forwarded as soon as possible.
 
 **Plasticity**
+
 - A "first packet" can take time to be served.
 - We can await for locks and that data structures are properly
  synced b/w LBs or b/w Backend/LB.
@@ -61,6 +64,7 @@ packet loss is accepted if the rate is low and only occurs shortly after
 a backend became unavailable.
 
 To be considered:
+
 - A backend can be removed or lost at any time.
 - A backend can be added at any time.
 - A loadbalancer can be removed or lost at any time.
@@ -183,21 +187,23 @@ Hence we must ensure that backendsWithCapacity are.
 ### Scenario 3. Backend becomes down
 
 #### Backend becomes down definitevely (same as backend is removed)
+
 #### Backend becomes down & recovers
 
-### Scenario 4. Backend is added 
+### Scenario 4. Backend is added
 
 #### 1 or Many new backends is added
+
 #### Backends are replaced (rollout or blue-green)
 
 ### Scenario 5. Garbage collect "closed" SessionIds
 
 ## Resources
 
-- https://ebpf-go.dev/guides/getting-started/
-- https://storage.googleapis.com/gweb-research2023-media/pubtools/2904.pdf
-- https://github.com/davidcoles/xvs
-- https://eunomia.dev/en/tutorials/42-xdp-loadbalancer/
+- <https://ebpf-go.dev/guides/getting-started/>
+- <https://storage.googleapis.com/gweb-research2023-media/pubtools/2904.pdf>
+- <https://github.com/davidcoles/xvs>
+- <https://eunomia.dev/en/tutorials/42-xdp-loadbalancer/>
 
 ## Prerequisites
 
@@ -214,6 +220,10 @@ sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/asm
 
 # bpf2go (actually optional)
 go get github.com/cilium/ebpf/cmd/bpf2go
+
+# protoc
+sudo apt install -y protobuf-compiler
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 ```
 
 ## Run ebpf program

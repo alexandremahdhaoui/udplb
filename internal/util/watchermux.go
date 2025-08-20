@@ -59,6 +59,10 @@ type watcher[T any] struct {
 	filter FilterFunc
 }
 
+func (w *watcher[T]) shouldSkip(v T) bool {
+	return w.filter != nil && !w.filter(v)
+}
+
 type WatcherMux[T any] struct {
 	watchers          map[int]*watcher[T] // set of watchers
 	watcherIdCount    int
@@ -133,7 +137,7 @@ type (
 // channel in a timely manner.
 func NonBlockingDispatchFunc[T any](wm *WatcherMux[T], v T) {
 	for _, w := range wm.getWatcherList() {
-		if w.filter != nil && !w.filter(v) {
+		if w.shouldSkip(v) {
 			continue // skip
 		}
 		select {
@@ -175,7 +179,7 @@ func NewDispatchFuncWithTimeoutAndWorkerPool[T any](
 }
 
 func dispatchOne[T any](w *watcher[T], timeoutDuration time.Duration, v T) {
-	if w.filter != nil && !w.filter(v) {
+	if w.shouldSkip(v) {
 		return
 	}
 

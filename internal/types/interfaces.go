@@ -22,13 +22,39 @@ import (
 	"github.com/google/uuid"
 )
 
-var (
-	ErrAlreadyClosed  = errors.New("trying to close an already closed interface")
-	ErrAlreadyRunning = errors.New("trying to run an already running interface")
+/******************************************************************************
+ * Cluster
+ *
+ ******************************************************************************/
 
-	ErrCannotRunClosedRunnable         = errors.New("cannot run a closed runnable")
-	ErrRunnableMustBeRunningToBeClosed = errors.New("runnable must be running to be closed")
-)
+// Cluster does not know anything about consensus or write-ahead logs, it only cares
+// about sending and receiving bytes to other nodes over the network.
+type Cluster[T any] interface {
+	Runnable
+
+	Send(ch <-chan T) error
+	// needs to multiplex the chan so multiple subsystem can receive the same stream
+	// of messages from the cluster.
+	// The returned cancel function can be used to stop receiving.
+	Recv() (<-chan T, func()) // this is basically types.Watcher[T]
+
+	// Join a cluster. Advertise itself and discover other nodes.
+	Join() error
+	// Signal other nodes we're leaving the cluster, e.g. for graceful shutdown.
+	// Should be called before Close().
+	// TODO: or should Close always leave the cluster?
+	Leave() error
+
+	// We need to be aware of the nodes in the cluster when trying to make a consensus.
+	ListNodes() []uuid.UUID
+}
+
+type RawCluster = Cluster[RawData]
+
+/******************************************************************************
+ * Codec
+ *
+ ******************************************************************************/
 
 // Simple interface that implements Encode and Decode method.
 type Codec interface {
@@ -36,6 +62,11 @@ type Codec interface {
 	// Decode will decode the buffer into itself.
 	Decode(buf []byte) error
 }
+
+/******************************************************************************
+ * DoneCloser
+ *
+ ******************************************************************************/
 
 // DoneCloser wraps the Close and Done methods. This methods respectively
 // signal the interface to terminate its execution gracefully, and returns
@@ -53,6 +84,34 @@ type DoneCloser interface {
 	Done() <-chan struct{}
 }
 
+/******************************************************************************
+ * DVDS
+ *
+ ******************************************************************************/
+
+// DVDS or Distributed Volatile Data Structure is a controller that consent with a
+// cluster of nodes about a consistent state of a given data structure U.
+//
+// NB: this is maybe a bad implementation and the WAL should be streamed to the state
+// machine. But this implementation ensures the state is fetched from other nodes on
+// restart and that the WAL is properly purged etc...
+//
+// On start: (omits all calls related to joining a cluster etc...)
+// - getWAL() -> returns the latest state of the WAL
+// - getStateAt(commit) -> returns the state of the data structure at commit
+type DVDS[T any, U any] interface {
+	Runnable
+	Watcher[U]
+
+	// Propose a new data entry.
+	Propose(key string, command StateMachineCommand, obj T) error
+}
+
+/******************************************************************************
+ * Runnable
+ *
+ ******************************************************************************/
+
 // Runnable can be run and gracefully shut down.
 // - Please use `<-Done()` to await until the Runnable is done.
 // - Please use `Close()` to terminate the Runnable execution.
@@ -63,13 +122,10 @@ type Runnable interface {
 	Run(ctx context.Context) error
 }
 
-type Watcher[T any] interface {
-	DoneCloser
-
-	// Watch returns a receiver channel and a cancel func to stop
-	// watching.
-	Watch() (<-chan T, func())
-}
+/******************************************************************************
+ * StateMachine
+ *
+ ******************************************************************************/
 
 type StateMachineCommand string
 
@@ -103,15 +159,20 @@ type StateMachine[T any, U any] interface {
 	DeepCopy() StateMachine[T, U]
 }
 
+/******************************************************************************
+ * WAL
+ *
+ ******************************************************************************/
+
 // A Write-Ahead Log interface will provide joiner-nodes with the latest state of the
 // underlying datastructure managed by a state machine and a consitent log.
 // Nodes that misses messages or which state diverges can request a re-sync?
 type WAL[T any] interface {
 	Runnable
-	Watcher[[]T]
+	Watcher[WalLinkedList[T]]
 
-	// Propose a new entry.
-	Propose(proposal WALEntry[T]) error
+	// Propose a new entry. This is a non blocking call.
+	Propose(entry WALEntry[T]) error
 }
 
 // The WAL multiplexer is responsible for passing the right WAL entries to the
@@ -124,26 +185,15 @@ type WALMux interface {
 	Register(walId uuid.UUID, v any) (Watcher[any], error)
 }
 
-type RawCluster = Cluster[RawData]
+/******************************************************************************
+ * Watcher
+ *
+ ******************************************************************************/
 
-// Cluster does not know anything about consensus or write-ahead logs, it only cares
-// about sending and receiving bytes to other nodes over the network.
-type Cluster[T any] interface {
-	Runnable
+type Watcher[T any] interface {
+	DoneCloser
 
-	Send(ch <-chan T) error
-	// needs to multiplex the chan so multiple subsystem can use receive the same stream
-	// of messages from the cluster.
-	// The returned cancel function can be used to stop receiving.
-	Recv() (<-chan T, func())
-
-	// Join a cluster. Advertise itself and discover other nodes.
-	Join() error
-	// Signal other nodes we're leaving the cluster, e.g. for graceful shutdown.
-	// Should be called before Close().
-	// TODO: or should Close always leave the cluster?
-	Leave() error
-
-	// We need to be aware of the nodes in the cluster when trying to make a consensus.
-	ListNodes() []uuid.UUID
+	// Watch returns a receiver channel and a cancel func to stop
+	// watching.
+	Watch() (<-chan T, func())
 }

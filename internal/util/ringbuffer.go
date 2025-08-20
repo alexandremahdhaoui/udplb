@@ -19,6 +19,8 @@ import "sync"
 
 // TODO: write unit tests
 
+// TODO: (tentatively) Refactor RingBuffer to implement types.Watcher[T] instead of .Next() method
+
 func NewRingBuffer[T any](size int) *RingBuffer[T] {
 	return &RingBuffer[T]{
 		buf:      make([]*T, size),

@@ -18,24 +18,143 @@ package types
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
 )
 
 type (
+	Hash = [32]byte
+
 	RawData     = []byte
 	RawWALEntry = WALEntry[RawData]
 )
 
-type WALEntryType int
+var (
+	NilHash = Hash([32]byte{})
 
-const (
-	DataWALEntryType WALEntryType = iota
-	StateWALEntryType
+	ErrEntryCannotBeFoundInWalLinkedList = errors.New("entry cannot be found in wal linked list")
+	ErrGettingNextEntryFromWalLinkedList = errors.New("getting next entry from wal linked list")
+	ErrMalformedWalLinkedList            = errors.New("malformed wal linked list")
 )
 
+// [Context from dvds implementation]
+//
+// The returned type of the wal channel must be a linked list:
+//
+// Solution A:
+//   - The wal ch returns a struct holding a map[walEntryHash]WALEntry
+//   - It also holds the hash of the first and last entries to allow quick
+//     access to head and tail
+//
+// Solution B:
+//   - types.WALEntry[T] must hold pointers to previous and next entry.
+//   - We also want a map[walEntryHash]*walEntry
+//   - dvds can hold:
+//   - walEntryHash of the last successfully executed WALEntry
+//   - state machine
+//   - PROBLEM: cloning the linked list is costly because it requires
+//     deep copying all entries and update all pointers of the
+//     linked list.
+type WalLinkedList[T any] struct {
+	head, tail Hash
+	m          map[Hash]WALEntry[T]
+}
+
+func (s WalLinkedList[T]) TailHash() Hash {
+	return s.tail
+}
+
+func (s WalLinkedList[T]) GetNext(hash Hash) (WALEntry[T], error) {
+	curr, err := s.Get(hash)
+	if err != nil {
+		return WALEntry[T]{}, flaterrors.Join(err, ErrGettingNextEntryFromWalLinkedList)
+	}
+
+	if curr.Hash == NilHash {
+		// Edge case where prev is not the tail and next hash is nil.
+		// -> ll must be validated before sent, but handling
+		// the edge case here ensure we don't get strange
+		// errors.
+		return WALEntry[T]{}, errors.Join(
+			ErrMalformedWalLinkedList,
+			ErrGettingNextEntryFromWalLinkedList,
+		)
+	}
+
+	out, err := s.Get(curr.NextHash)
+	if err != nil {
+		return WALEntry[T]{}, flaterrors.Join(err, ErrGettingNextEntryFromWalLinkedList)
+	}
+
+	return out, nil
+}
+
+func (s WalLinkedList[T]) Get(hash Hash) (WALEntry[T], error) {
+	out, ok := s.m[hash]
+	if !ok {
+		return WALEntry[T]{}, ErrEntryCannotBeFoundInWalLinkedList
+	}
+	return out, nil
+}
+
+func (s WalLinkedList[T]) Contains(hash Hash) bool {
+	_, ok := s.m[hash]
+	return ok
+}
+
+func NewWALEntry[T any](
+	previousHash Hash,
+	key string,
+	command StateMachineCommand,
+	obj T,
+) (WALEntry[T], error) {
+	out := WALEntry[T]{
+		PreviousHash: previousHash,
+		Timestamp:    time.Now(),
+		Key:          key,
+		Command:      command,
+		Object:       obj,
+
+		// Field that MUST NOT be set before computing hash.
+		Hash:     Hash{},
+		NextHash: Hash{},
+		WALId:    "", // TODO:
+	}
+
+	buf := make([]byte, 0)
+	if _, err := binary.Encode(buf, binary.LittleEndian, out); err != nil {
+		return WALEntry[T]{}, nil
+	}
+	out.Hash = sha256.Sum256(buf)
+
+	return out, nil
+}
+
 type WALEntry[T any] struct {
+	// Hash of this WAL entry.
+	// Obviously: it MUST NOT participate to the hash of this entry.
+	Hash Hash
+	// Hash of the previous entry in the WAL.
+	PreviousHash Hash
+	// Hash of the next entry in the WAL.
+	// NOTE: NextHash MUST NOT participate to the hash of this entry.
+	// NextHash's purposes is to build a linked list.
+	NextHash Hash
+
+	// The timestamp ensures the proposed entries are consented in the right
+	// order. The timestamp allows the observer WALEntries to process them in
+	// order.
+	Timestamp time.Time
+
+	// WALId is the Id of a WAL. This Id serves the purpose of looking up the actual
+	// type T. This type is then use to decode `types.RawWALProposal.Data` by a
+	// multiplexer.
+	// NOTE: WALId MUST NOT participate to the hash of this entry.
+	// This is a helper field
+	WALId string
+
 	// The key ensures that duplicated proposals from 2 or more nodes does not
 	// create a duplicate WAL entry.
 	//
@@ -56,82 +175,10 @@ type WALEntry[T any] struct {
 	// all nodes N are considered giving their consent to the first WALProposal of
 	// seq[n', K, d, N]. All subsequent proposals are discarded.
 	Key string
-	// Data is the data of type T.
-	Data T
 
-	// The timestamp ensures the proposed entries are consented in the right
-	// order. The timestamp allows the observer WALEntries to process them in
-	// order.
-	Timestamp time.Time
-	// WALName is the Id of a WAL used for multiplexing.
-	// Its purpose is to simplify the dispatchment of entries and the lookup
-	// of the actual type of data T.
-	WALName string
+	// Command is the command that must be executed on the underlying state machine
+	Command StateMachineCommand
 
-	// ProposalHash is the hash of the proposal.
-	// It's the hash of the binary encoded data of WALEntry excluding the
-	// PreviousHash and Hash (not known at proposal time).
-	ProposalHash [32]byte
-	// PreviousHash is the Hash of the previous entry in the WAL.
-	PreviousHash [32]byte
-	// Hash of this WAL entry.
-	Hash [32]byte
-}
-
-type Suggestion[T any] struct {
-	Key  string
-	Data T
-}
-
-// Creates a WALEntry[T] of type Standard.
-func NewProposal[T any](
-	key string,
-	data T,
-) Suggestion[T] {
-	return Suggestion[T]{
-		Key:  key,
-		Data: data,
-	}
-}
-
-// Create a new Entry from an accepted Proposal.
-func TransformProposalIntoWALEntry[T any](
-	walId uuid.UUID,
-	previousHash [32]byte,
-	proposal Suggestion[T],
-) (WALEntry[T], error) {
-	out := WALEntry[T]{
-		PreviousHash: previousHash,
-		Hash:         [32]byte{},
-		Timestamp:    time.Now(),
-		Key:          proposal.Key,
-		Data:         proposal.Data,
-	}
-
-	buf := make([]byte, 0)
-	if _, err := binary.Encode(buf, binary.LittleEndian, out); err != nil {
-		return WALEntry[T]{}, nil
-	}
-	out.Hash = sha256.Sum256(buf)
-
-	return out, nil
-}
-
-func RawWALEntryInto[T any](
-	in RawWALEntry,
-) (WALEntry[T], error) {
-	out := WALEntry[T]{
-		Hash:         in.Hash,
-		PreviousHash: in.PreviousHash,
-		Timestamp:    in.Timestamp,
-		Key:          in.Key,
-		WALName:      in.WALName,
-		Data:         *new(T),
-	}
-
-	if _, err := binary.Decode(in.Data, binary.LittleEndian, &out.Data); err != nil {
-		return WALEntry[T]{}, err
-	}
-
-	return out, nil
+	// Object is the data of type T.
+	Object T
 }

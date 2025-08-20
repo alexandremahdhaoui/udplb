@@ -79,6 +79,7 @@ func New(
 	ip net.IP,
 	port uint16,
 	lookupTableSize uint32,
+	watcherMux *util.WatcherMux[types.Assignment],
 ) (types.Runnable, DataStructureManager, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, nil, flaterrors.Join(err, ErrRemovingMemlock, ErrCreatingNewBPFProgram)
@@ -116,7 +117,7 @@ func New(
 	}
 
 	// -- init & run manager
-	manager := NewDataStructureManager(objs)
+	manager := NewDataStructureManager(objs, watcherMux)
 	closePropagationFunc := func() error {
 		return manager.Close()
 	}
@@ -159,7 +160,11 @@ func (r *runnable) Run(ctx context.Context) error {
 	if err != nil {
 		return flaterrors.Join(err, ErrRunningUdplbUserlandProgram)
 	}
-	defer link.Close()
+	defer func() {
+		if err := link.Close(); err != nil {
+			slog.ErrorContext(ctx, "Closing XDP link", "err", err)
+		}
+	}()
 
 	r.running = true
 	slog.InfoContext(ctx, "XDP program loaded successfully", "ifname", r.iface.Name)
@@ -171,14 +176,20 @@ func (r *runnable) Run(ctx context.Context) error {
 // -- TraceBPF
 // -------------------------------------------------------------------
 
+const tracepipeFilepath = "/sys/kernel/debug/tracing/trace_pipe"
+
 func (r *runnable) TraceBPF() error {
 	// -- print bpf trace logs
-	fd, err := os.OpenFile("/sys/kernel/debug/tracing/trace_pipe", os.O_RDONLY, os.ModeAppend)
+	fd, err := os.OpenFile(tracepipeFilepath, os.O_RDONLY, os.ModeAppend)
 	if err != nil {
 		return err
 	}
 
-	defer fd.Close()
+	defer func() {
+		if err := fd.Close(); err != nil {
+			slog.Error(fmt.Sprintf("Closing %q file descriptor", tracepipeFilepath), "err", err)
+		}
+	}()
 	go func() {
 		scanner := bufio.NewScanner(fd)
 		scanner.Split(bufio.ScanLines)

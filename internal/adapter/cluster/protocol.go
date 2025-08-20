@@ -13,15 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package types
+package clusteradpater
 
-import "errors"
-
-var ErrNotFound = errors.New("not found")
-
-var ( // Runnable
-	ErrAlreadyClosed                   = errors.New("trying to close an already closed interface")
-	ErrAlreadyRunning                  = errors.New("trying to run an already running interface")
-	ErrCannotRunClosedRunnable         = errors.New("cannot run a closed runnable")
-	ErrRunnableMustBeRunningToBeClosed = errors.New("runnable must be running to be closed")
-)
+// TODO: Define Protocol
+// Or: shall protocol be replaced by a client.
+type Protocol interface {
+	TODO()
+}
