@@ -50,7 +50,7 @@ in UDPLB.
 
 ## Data types
 
-There are 2 types of data controllers manages:
+There are 2 types of data that controllers manage:
 
 - Persisted data:
   - Any data that can be obtained from diverse persistent source of data.
@@ -75,11 +75,10 @@ The 2 latters are data kinds of type `volatile`.
 
 ## Signal transduction
 
-All data types (persisted or volatile) may be subject to signal transduction of
-varied types.
+All data types (persisted or volatile) may be subject to signal transduction of varied types.
 
-Additionally, one data kind may use more than one signalling pathway. These different pathways may
-use different signal transduction types.
+Additionally, one data kind may use more than one signalling pathway. These different pathways
+may use different signal transduction types.
 
 There are 3 different types of signal transduction:
 
