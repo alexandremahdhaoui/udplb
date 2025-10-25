@@ -17,7 +17,6 @@ package waladapter
 
 import (
 	"context"
-	"time"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -139,12 +138,6 @@ func New[T any](
 func (w *wal[T]) Propose(proposal types.WALEntry[T]) error {
 	// TODO: add the WALId to the proposal.
 	proposal.WALName = w.name
-	types.WALEntry[T]{
-		Key:       "",
-		Data:      *new(T),
-		Timestamp: time.Now(),
-		WALName:   "",
-	}
 
 	w.proposalBuffer.Write(proposal)
 	return nil
@@ -157,8 +150,8 @@ func (w *wal[T]) Propose(proposal types.WALEntry[T]) error {
 
 // Watch will return a channel sending representation of the underlying state
 // as soon it changes.
-func (w *wal[T]) Watch() (<-chan []T, error) {
-	return w.watcherMux.Watch(), nil
+func (w *wal[T]) Watch() (<-chan []T, func()) {
+	return w.watcherMux.Watch(util.NoFilter)
 }
 
 /*******************************************************************************

@@ -52,6 +52,8 @@ func New() VMAgent {
 
 type vmagent struct{}
 
+type Config struct{}
+
 /******************************************************************************
  * RunVMAgent
  *

@@ -95,18 +95,23 @@ func (l *LinkedList[T]) Append(data T) {
 	// This will not deadlock because *LLNode[T] does not implement methods
 	// that locks and block; and there are no other locking usage of l.tail
 	// that could collide with this.
-	oldTail := l.tail
-	oldTail.mu.Lock()
-	oldTail.next = &LLNode[T]{
-		previous: oldTail,
+	newNode := &LLNode[T]{
+		previous: nil,
 		next:     nil,
 		data:     data,
 		mu:       &sync.Mutex{},
 	}
-	oldTail.mu.Unlock()
+
+	if l.head == nil {
+		l.head = newNode
+		l.tail = newNode
+	} else {
+		l.tail.next = newNode
+		newNode.previous = l.tail
+		l.tail = newNode
+	}
 	// -- END critical section
 
-	l.tail = l.tail.next
 	l.length += 1
 }
 

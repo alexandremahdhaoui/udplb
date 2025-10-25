@@ -17,7 +17,7 @@ package monitoradapter
 
 import "github.com/alexandremahdhaoui/udplb/internal/types"
 
-var _ types.Watcher[types.BackendStatus] = &backendState{}
+var _ types.Watcher[types.BackendStatus] = &BackendState{}
 
 // TODO: Define & Implement the Backend monitor.
 
@@ -25,4 +25,16 @@ var _ types.Watcher[types.BackendStatus] = &backendState{}
 //
 // Please see `internal/controller/README.md` to learn more about data
 // kinds, types, signal transduction and pathways.
-type backendState struct{}
+type BackendState struct{}
+
+func (b *BackendState) Watch() (<-chan types.BackendStatus, func()) {
+	panic("unimplemented")
+}
+
+func (b *BackendState) Close() error {
+	panic("unimplemented")
+}
+
+func (b *BackendState) Done() <-chan struct{} {
+	panic("unimplemented")
+}

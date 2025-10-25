@@ -26,3 +26,15 @@ import "github.com/alexandremahdhaoui/udplb/internal/types"
 var _ types.Watcher[types.Assignment] = &RemoteAssignment{}
 
 type RemoteAssignment struct{}
+
+func (r *RemoteAssignment) Watch() (<-chan types.Assignment, func()) {
+	panic("unimplemented")
+}
+
+func (r *RemoteAssignment) Close() error {
+	panic("unimplemented")
+}
+
+func (r *RemoteAssignment) Done() <-chan struct{} {
+	panic("unimplemented")
+}

@@ -29,8 +29,20 @@ import (
 // -- LBSpec
 // The LB spec or config cannot be updated at runtime.
 
-var _ types.Watcher[BackendSpecMap] = &backendSpecList{}
+var _ types.Watcher[BackendSpecMap] = &BackendSpecList{}
 
 type BackendSpecMap = map[uuid.UUID]types.BackendSpec
 
-type backendSpecList struct{}
+type BackendSpecList struct{}
+
+func (b *BackendSpecList) Watch() (<-chan BackendSpecMap, func()) {
+	panic("unimplemented")
+}
+
+func (b *BackendSpecList) Close() error {
+	panic("unimplemented")
+}
+
+func (b *BackendSpecList) Done() <-chan struct{} {
+	panic("unimplemented")
+}

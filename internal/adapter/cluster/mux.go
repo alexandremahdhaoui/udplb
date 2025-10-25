@@ -23,6 +23,8 @@ import (
 	"github.com/google/uuid"
 )
 
+type Protocol interface{}
+
 var _ types.RawCluster = &clusterMux{}
 
 /*******************************************************************************

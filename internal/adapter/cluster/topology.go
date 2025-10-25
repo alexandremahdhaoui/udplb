@@ -55,6 +55,12 @@ type Topology interface {
 	recv() // ?
 }
 
-func NewFullyConnectedTopology() Topology
-func NewLeaderTopology() Topology
-func NewRingTopology() Topology
+func NewFullyConnectedTopology() Topology {
+	panic("unimplemented")
+}
+func NewLeaderTopology() Topology {
+	panic("unimplemented")
+}
+func NewRingTopology() Topology {
+	panic("unimplemented")
+}

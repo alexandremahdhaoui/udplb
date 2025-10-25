@@ -40,6 +40,7 @@ func NewWatcherMux[T any](
 		mu:                &sync.Mutex{},
 		dispatchFunc:      dispatchFunc,
 		doneCh:            make(chan struct{}),
+		watchers:          make(map[int]*watcher[T]),
 	}
 }
 
@@ -93,7 +94,12 @@ func (wm *WatcherMux[T]) Watch(filter FilterFunc) (<-chan T, func()) {
 }
 
 func (wm *WatcherMux[T]) Dispatch(v T) {
-	wm.dispatchFunc(wm, v)
+	select {
+	case <-wm.doneCh:
+		return
+	default:
+		wm.dispatchFunc(wm, v)
+	}
 }
 
 func (wm *WatcherMux[T]) getWatcherList() []*watcher[T] {

@@ -44,6 +44,7 @@ const (
 type NetdevSpec struct {
 	Name string     `json:"name"`
 	IP   string     `json:"ip"`
+	Addr string     `json:"addr"`
 	Type NetdevType `json:"type"`
 	Link string     `json:"link,omitempty"` // e.g. a tap can set link with br0 (ip l set tap0 master br0)
 }
@@ -67,6 +68,8 @@ type VMSpec struct {
 type Config struct {
 	VMs         []VMSpec     `json:"vms"`
 	HostNetdevs []NetdevSpec `json:"hostNetdevs"`
+	Taps        []NetdevSpec `json:"taps"`
+	Bridge      NetdevSpec   `json:"bridge"`
 }
 
 // Idea: Add support for redirecting packet to a != network interface.
@@ -116,6 +119,10 @@ func main() {
 
 func Teardown(cfg Config) error {
 	return nil
+}
+
+func RunVMAgent(cfg Config) error {
+	panic("unimplemented")
 }
 
 /******************************************************************************

@@ -116,7 +116,8 @@ func New(
 	}
 
 	// -- init & run manager
-	manager := NewDataStructureManager(objs)
+	assignmentWatcherMux := util.NewWatcherMux[types.Assignment](util.WatcherMuxRecommendedBufferSize, util.NonBlockingDispatchFunc[types.Assignment])
+	manager := NewDataStructureManager(objs, assignmentWatcherMux)
 	closePropagationFunc := func() error {
 		return manager.Close()
 	}
