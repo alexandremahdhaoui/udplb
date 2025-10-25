@@ -15,9 +15,11 @@
  */
 package util
 
+import "reflect"
+
 func AnyPtrIsNil(pointers ...any) bool {
 	for _, ptr := range pointers {
-		if ptr == nil {
+		if ptr == nil || (reflect.ValueOf(ptr).Kind() == reflect.Ptr && reflect.ValueOf(ptr).IsNil()) {
 			return true
 		}
 	}

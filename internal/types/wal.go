@@ -16,8 +16,9 @@
 package types
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
+	"encoding/gob"
 	"time"
 
 	"github.com/google/uuid"
@@ -108,11 +109,11 @@ func TransformProposalIntoWALEntry[T any](
 		Data:         proposal.Data,
 	}
 
-	buf := make([]byte, 0)
-	if _, err := binary.Encode(buf, binary.LittleEndian, out); err != nil {
-		return WALEntry[T]{}, nil
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(out); err != nil {
+		return WALEntry[T]{}, err
 	}
-	out.Hash = sha256.Sum256(buf)
+	out.Hash = sha256.Sum256(buf.Bytes())
 
 	return out, nil
 }
@@ -126,10 +127,10 @@ func RawWALEntryInto[T any](
 		Timestamp:    in.Timestamp,
 		Key:          in.Key,
 		WALName:      in.WALName,
-		Data:         *new(T),
 	}
 
-	if _, err := binary.Decode(in.Data, binary.LittleEndian, &out.Data); err != nil {
+	reader := bytes.NewReader(in.Data)
+	if err := gob.NewDecoder(reader).Decode(&out.Data); err != nil {
 		return WALEntry[T]{}, err
 	}
 

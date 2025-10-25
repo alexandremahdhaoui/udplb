@@ -35,11 +35,15 @@ func ParseIPV4ToUint32(s string) (uint32, error) {
 		return 0, errors.New("IP must be ipv4")
 	}
 
-	return binary.NativeEndian.Uint32(ipv4), nil
+	return binary.BigEndian.Uint32(ipv4), nil
 }
 
-func NetIPv4ToUint32(ip net.IP) uint32 {
-	return binary.NativeEndian.Uint32(ip.To4())
+func NetIPv4ToUint32(ip net.IP) (uint32, error) {
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return 0, errors.New("IP must be ipv4")
+	}
+	return binary.BigEndian.Uint32(ipv4), nil
 }
 
 var errParseIEEE802MAC = errors.New(
@@ -77,7 +81,7 @@ func ParseIEEE802MAC(s string) ([6]uint8, error) {
 var ErrInvalidUDPLBPort = errors.New("udplb port is invalid")
 
 func ValidateUint16Port(port int) error {
-	if port < 1000 || port > math.MaxUint16 {
+	if port < 1 || port > math.MaxUint16 {
 		return ErrInvalidUDPLBPort
 	}
 	return nil
