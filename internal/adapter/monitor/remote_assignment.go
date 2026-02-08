@@ -25,4 +25,22 @@ import "github.com/alexandremahdhaoui/udplb/internal/types"
 
 var _ types.Watcher[types.Assignment] = &RemoteAssignment{}
 
-type RemoteAssignment struct{}
+type RemoteAssignment struct {
+	doneCh chan struct{}
+}
+
+func (r *RemoteAssignment) Close() error {
+	// TODO: implement
+	close(r.doneCh)
+	return nil
+}
+
+func (r *RemoteAssignment) Done() <-chan struct{} {
+	return r.doneCh
+}
+
+func (r *RemoteAssignment) Watch() (<-chan types.Assignment, func()) {
+	// TODO: implement
+	ch := make(chan types.Assignment)
+	return ch, func() {}
+}

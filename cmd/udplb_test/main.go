@@ -64,9 +64,37 @@ type VMSpec struct {
 	UDPLB     UDPLBSpec      `json:"udplb"`
 }
 
+type VMsConfig struct {
+	BaseImage    string   `json:"baseImage"`
+	CloudInitTpl string   `json:"cloudInitTpl"`
+	Specs        []VMSpec `json:"specs"`
+}
+
 type Config struct {
-	VMs         []VMSpec     `json:"vms"`
+	VMs         VMsConfig    `json:"vms"`
 	HostNetdevs []NetdevSpec `json:"hostNetdevs"`
+}
+
+// Bridges returns all network devices of type "bridge" from HostNetdevs.
+func (c Config) Bridges() []NetdevSpec {
+	var bridges []NetdevSpec
+	for _, nd := range c.HostNetdevs {
+		if nd.Type == NetdevTypeBridge {
+			bridges = append(bridges, nd)
+		}
+	}
+	return bridges
+}
+
+// Taps returns all network devices of type "tap" from HostNetdevs.
+func (c Config) Taps() []NetdevSpec {
+	var taps []NetdevSpec
+	for _, nd := range c.HostNetdevs {
+		if nd.Type == NetdevTypeTap {
+			taps = append(taps, nd)
+		}
+	}
+	return taps
 }
 
 // Idea: Add support for redirecting packet to a != network interface.
@@ -97,7 +125,7 @@ func main() {
 	case "run":
 		err = Run(cfg)
 	case "vm-agent":
-		err = RunVMAgent(cfg)
+		err = RunVMAgent()
 	}
 
 	if err != nil {
@@ -115,6 +143,12 @@ func main() {
  ******************************************************************************/
 
 func Teardown(cfg Config) error {
+	return nil
+}
+
+// RunVMAgent runs the VM agent for E2E testing.
+// TODO: implement actual VM agent logic
+func RunVMAgent() error {
 	return nil
 }
 

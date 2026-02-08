@@ -36,6 +36,7 @@ func NewWatcherMux[T any](
 	dispatchFunc WatcherMuxDispatchFunc[T],
 ) *WatcherMux[T] {
 	return &WatcherMux[T]{
+		watchers:          make(map[int]*watcher[T]),
 		watcherChCapacity: channelBufferSize,
 		mu:                &sync.Mutex{},
 		dispatchFunc:      dispatchFunc,
@@ -54,9 +55,10 @@ type FilterFunc func(v any) bool
 var NoFilter FilterFunc = nil
 
 type watcher[T any] struct {
-	ch     chan T
-	doneCh chan struct{}
-	filter FilterFunc
+	ch        chan T
+	doneCh    chan struct{}
+	filter    FilterFunc
+	closeOnce sync.Once
 }
 
 type WatcherMux[T any] struct {
@@ -87,7 +89,7 @@ func (wm *WatcherMux[T]) Watch(filter FilterFunc) (<-chan T, func()) {
 		wm.mu.Lock()
 		defer wm.mu.Unlock()
 		close(w.doneCh)
-		close(w.ch)
+		w.closeOnce.Do(func() { close(w.ch) })
 		delete(wm.watchers, id)
 	}
 }
@@ -114,7 +116,7 @@ func (wm *WatcherMux[T]) Done() <-chan struct{} {
 
 func (wm *WatcherMux[T]) Close() error {
 	for _, w := range wm.getWatcherList() {
-		close(w.ch)
+		w.closeOnce.Do(func() { close(w.ch) })
 	}
 	close(wm.doneCh)
 	return nil

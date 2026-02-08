@@ -51,7 +51,6 @@ func Setup(cfg Config) error {
 
 func setupNetwork(cfg Config) error {
 	// Loopback
-
 	lo, err := netlink.LinkByName("lo")
 	if err != nil {
 		return errors.New("cannot get loopback interface by name")
@@ -61,52 +60,52 @@ func setupNetwork(cfg Config) error {
 		return flaterrors.Join(err, fmt.Errorf("cannot set link %q up", lo.Attrs().Name))
 	}
 
-	// -- Bridge
-
-	br := &netlink.Bridge{LinkAttrs: netlink.NewLinkAttrs()}
-	br.Name = cfg.Bridge.Name
-	br.Flags |= net.FlagUp
-
-	if err = netlink.LinkAdd(br); err != nil {
-		return flaterrors.Join(err, fmt.Errorf("cannot add linkr %q", br.Name))
+	// -- Create bridges
+	bridges := cfg.Bridges()
+	if len(bridges) == 0 {
+		return errors.New("no bridges defined in config")
 	}
 
-	slog.Info("successfully created bridge", "ifname", br.Name)
+	// Map bridge names to netlink.Bridge for TAP device setup
+	bridgeMap := make(map[string]*netlink.Bridge)
 
-	brAddr, err := netlink.ParseAddr(cfg.Bridge.Addr)
-	if err != nil {
-		return flaterrors.Join(err, fmt.Errorf("cannot parse cidr for %q", br.Name))
+	for _, brSpec := range bridges {
+		br := &netlink.Bridge{LinkAttrs: netlink.NewLinkAttrs()}
+		br.Name = brSpec.Name
+		br.Flags |= net.FlagUp
+
+		if err = netlink.LinkAdd(br); err != nil {
+			return flaterrors.Join(err, fmt.Errorf("cannot add link %q", br.Name))
+		}
+
+		slog.Info("successfully created bridge", "ifname", br.Name)
+
+		if brSpec.IP != "" {
+			brAddr, err := netlink.ParseAddr(brSpec.IP)
+			if err != nil {
+				return flaterrors.Join(err, fmt.Errorf("cannot parse cidr for %q", br.Name))
+			}
+
+			if err = netlink.AddrAdd(br, brAddr); err != nil {
+				return flaterrors.Join(err, fmt.Errorf("cannot set ip to %q", br.Name))
+			}
+
+			mask, _ := brAddr.Mask.Size()
+			slog.Info(
+				"successfully set ip addr",
+				"ifname", br.Name,
+				"ip", fmt.Sprintf("%s/%d", brAddr.IP.String(), mask),
+			)
+		}
+
+		bridgeMap[brSpec.Name] = br
 	}
 
-	if err = netlink.AddrAdd(br, brAddr); err != nil {
-		return flaterrors.Join(err, fmt.Errorf("cannot set ip to %q", br.Name))
-	}
-
-	mask, _ := brAddr.Mask.Size()
-	slog.Info(
-		"successfully set ip addr",
-		"ifname", br.Name,
-		"ip", fmt.Sprintf("%s/%d", brAddr.IP.String(), mask),
-	)
-
-	// ip r add 10.0.0.0/24 via 10.0.0.1 // br0
-	//
-	// subnetRoute := &netlink.Route{
-	// 	LinkIndex: br.Index,
-	// 	Dst:       ipnet,
-	// 	Via: &netlink.Via{
-	// 		AddrFamily: netlink.FAMILY_V4,
-	// 		Addr:       brAddr.IP,
-	// 	},
-	// }
-	// if err = netlink.RouteAdd(subnetRoute); err != nil {
-	// 	return flaterrors.Join(err, errors.New("cannot add route"))
-	// }
-	// slog.Info("successfully set route", "dest", brAddr.IPNet.String(), "via", brAddr.IP)
+	// Use first bridge as the primary for ECMP route setup
+	primaryBridge := bridgeMap[bridges[0].Name]
 
 	// [ECMP] Set up anycast.
 	ecmpRoute := &netlink.Route{
-		// LinkIndex: br.Index,
 		Dst: &net.IPNet{
 			IP:   net.ParseIP("10.0.0.123"), // TODO: LOADBALANCER IP!!!
 			Mask: net.CIDRMask(32, 32),
@@ -114,7 +113,8 @@ func setupNetwork(cfg Config) error {
 		MultiPath: nil,
 	}
 
-	for _, tap := range cfg.Taps {
+	// -- Create TAP devices
+	for _, tap := range cfg.Taps() {
 		tuntap := &netlink.Tuntap{
 			LinkAttrs: netlink.NewLinkAttrs(),
 			Mode:      netlink.TUNTAP_MODE_TAP,
@@ -132,66 +132,57 @@ func setupNetwork(cfg Config) error {
 			return flaterrors.Join(err, fmt.Errorf("cannot set link %q up", tuntap.Name))
 		}
 
-		tapAddr, err := netlink.ParseAddr(tap.Addr)
-		if err != nil {
-			return flaterrors.Join(err, fmt.Errorf("cannot parse cidr for %q", tap.Name))
-		}
+		// Set IP address if specified
+		if tap.IP != "" {
+			tapAddr, err := netlink.ParseAddr(tap.IP)
+			if err != nil {
+				return flaterrors.Join(err, fmt.Errorf("cannot parse cidr for %q", tap.Name))
+			}
 
-		if err := netlink.AddrAdd(tuntap, tapAddr); err != nil {
-			return flaterrors.Join(err, fmt.Errorf("cannot set ip to %q", tap.Name))
-		}
+			if err := netlink.AddrAdd(tuntap, tapAddr); err != nil {
+				return flaterrors.Join(err, fmt.Errorf("cannot set ip to %q", tap.Name))
+			}
 
-		mask, _ := tapAddr.Mask.Size()
-		slog.Info(
-			"successfully set ip addr",
-			"ifname", tap.Name,
-			"ip", fmt.Sprintf("%s/%d", tapAddr.IP.String(), mask),
-		)
-
-		if err := netlink.LinkSetMaster(tuntap, br); err != nil {
-			return flaterrors.Join(
-				err,
-				fmt.Errorf("cannot set link b/w %q & %q", tuntap.Name, br.Attrs().Name),
+			mask, _ := tapAddr.Mask.Size()
+			slog.Info(
+				"successfully set ip addr",
+				"ifname", tap.Name,
+				"ip", fmt.Sprintf("%s/%d", tapAddr.IP.String(), mask),
 			)
+
+			// Add to ECMP route multipath
+			ecmpRoute.MultiPath = append(ecmpRoute.MultiPath, &netlink.NexthopInfo{
+				Via: &netlink.Via{
+					AddrFamily: netlink.FAMILY_V4,
+					Addr:       tapAddr.IP.To4(),
+				},
+			})
 		}
 
-		slog.Info("successfully set link", "subject", tuntap.Name, "leader", br.Name)
-
-		// [ECMP] Set up anycast.
-		// "hard-code" the routes:
-		// - ip route add ${LB_IP}/32 nexthop via ${TAP_IP_0} dev br0 weigth 1
-		// - ip route append ${LB_IP}/32 nexthop via ${TAP_IP_1} dev br0 weigth 1
-		// - ip route append ${LB_IP}/32 nexthop via ${TAP_IP_2} dev br0 weigth 1
-		// This should emulate the ECMP setup via anycast. This one is hard-coded
-		// instead of advertised by BGP
-		ecmpRoute.MultiPath = append(ecmpRoute.MultiPath, &netlink.NexthopInfo{
-			// LinkIndex: br.Index,
-			Via: &netlink.Via{
-				AddrFamily: netlink.FAMILY_V4,
-				Addr:       tapAddr.IP.To4(), // strangely IP must be set with To4() otherwise will fail :shrug:
-			},
-		})
-
+		// Set master bridge (using Link field which maps to "link" or "master" in config)
+		masterName := tap.Link
+		if masterName == "" {
+			// Default to primary bridge if no link specified
+			masterName = primaryBridge.Name
+		}
+		if masterBr, ok := bridgeMap[masterName]; ok {
+			if err := netlink.LinkSetMaster(tuntap, masterBr); err != nil {
+				return flaterrors.Join(
+					err,
+					fmt.Errorf("cannot set link b/w %q & %q", tuntap.Name, masterBr.Attrs().Name),
+				)
+			}
+			slog.Info("successfully set link", "subject", tuntap.Name, "leader", masterBr.Name)
+		}
 	}
 
 	// [ECMP] Set up anycast advertised via BGP
-	// With a VM attached to the tap we can easily run a listener & a bgp daemon.
-	//  - https://github.com/osrg/gobgp/tree/master || https://github.com/osrg/rustybgp
-	//	- https://www.linuxjournal.com/magazine/ipv4-anycast-linux-and-quagga
-	// # 1. Configure loopback interface with anycast IP
-	// ip addr add ${LB_IP}/32 dev lo
-	//
-	// # 2. Configure BGP neighbor (replace details with your network)
-	// router bgp 65000
-	//  neighbor 10.0.0.1 remote-as 65001
-	//
-	// # 3. Advertise the anycast route
-	// network ${LB_IP}/32
-	if err := netlink.RouteAdd(ecmpRoute); err != nil {
-		return flaterrors.Join(err, errors.New("cannot add route"))
+	if len(ecmpRoute.MultiPath) > 0 {
+		if err := netlink.RouteAdd(ecmpRoute); err != nil {
+			return flaterrors.Join(err, errors.New("cannot add route"))
+		}
+		slog.Info("successfully set ECMP route")
 	}
-
-	slog.Info("successfully set ECMP route")
 
 	return nil
 }
@@ -203,5 +194,14 @@ func setupNetwork(cfg Config) error {
  ******************************************************************************/
 
 func prepareVMs(cfg Config) error {
-	panic("unimplemented")
+	// VM preparation is not yet implemented.
+	// The E2E test infrastructure requires QEMU VMs with Alpine Linux images,
+	// multi-NIC networking (PublicNet + PrivateNet), and macvlan device creation.
+	// This is tracked as future work separate from the forge migration.
+	if len(cfg.VMs.Specs) > 0 {
+		slog.Warn("VM preparation not implemented, skipping VM setup",
+			"vmCount", len(cfg.VMs.Specs),
+			"baseImage", cfg.VMs.BaseImage)
+	}
+	return nil
 }

@@ -25,6 +25,10 @@ import (
 
 var _ types.RawCluster = &clusterMux{}
 
+// Protocol is an abstraction over Send/Recv.
+// TODO: Define actual protocol interface (e.g. UDP or GRPC).
+type Protocol interface{}
+
 /*******************************************************************************
  * Concrete implementation
  *

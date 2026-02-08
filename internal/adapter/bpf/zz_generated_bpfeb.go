@@ -8,16 +8,19 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
 
 type udplbAssignmentT struct {
+	_         structs.HostLayout
 	SessionId [16]byte /* uint128 */
 	BackendId [16]byte /* uint128 */
 }
 
 type udplbBackendSpecT struct {
+	_    structs.HostLayout
 	Id   [16]byte /* uint128 */
 	Ip   uint32
 	Port uint16
@@ -26,6 +29,7 @@ type udplbBackendSpecT struct {
 }
 
 type udplbConfigT struct {
+	_               structs.HostLayout
 	Ip              uint32
 	Port            uint16
 	_               [2]byte

@@ -30,46 +30,12 @@ import (
 	"unsafe"
 
 	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
-	"github.com/google/uuid"
 )
 
-type (
-	orchestrator struct {
-		// Number of total sessions.
-		nSessions int
-		// Number of producers per session.
-		nProducersPerSession int
-		// Number of loadbalancers.
-		nLoadbalancers int
-		// Number of recorders
-		// The loadbalancer/backend ratio may not be 1-to-1.
-		nRecorders int
-	}
-
-	producer struct {
-		producerId uuid.UUID
-		sessionId  uuid.UUID
-
-		// Number of iteration per second.
-		// Please note that one iteration may produce more than 1 packet.
-		frequency int
-
-		// Number of packets sent per iteration.
-		// This can be useful to test loadbalancer's accuracy under high load.
-		packetPerIteration int
-	}
-
-	// recorder will be a process in a vm.
-	// we need to find a way to communicate with it.
-	// (via GRPC?)
-	recorder struct {
-		PID int
-		// IP of the recorder service running in the VM.
-		ServiceIP net.IP
-		// Port of the recorder service running in the VM.
-		ServicePort int
-	}
-)
+// TODO: These types are planned for future implementation.
+// type orchestrator struct { ... }
+// type producer struct { ... }
+// type recorder struct { ... }
 
 /******************************************************************************
  * Run
@@ -78,7 +44,11 @@ type (
  ******************************************************************************/
 
 func Run(cfg Config) error {
-	sk, err := OpenTapFd(cfg.Taps[0].Name)
+	taps := cfg.Taps()
+	if len(taps) == 0 {
+		return errors.New("no TAP devices defined in config")
+	}
+	sk, err := OpenTapFd(taps[0].Name)
 	if err != nil {
 		return err
 	}
@@ -98,7 +68,7 @@ func Run(cfg Config) error {
 		if err != nil {
 			slog.Error("opening socket to 10.0.0.10:12345", "err", err.Error())
 		}
-		defer cnx.Close()
+		defer func() { _ = cnx.Close() }()
 
 		for {
 			if _, err := cnx.Write([]byte("yolo")); err != nil {
@@ -148,7 +118,7 @@ func Run(cfg Config) error {
 func startUDPLB(ifname string) (*exec.Cmd, error) {
 	errCtx := fmt.Errorf("starting udplb on if %q", ifname)
 
-	os.Setenv("CGO_ENABLED", "0")
+	_ = os.Setenv("CGO_ENABLED", "0")
 	cmd := exec.Command("./udplb.o", "-")
 
 	stdin, err := cmd.StdinPipe()
@@ -166,7 +136,7 @@ func startUDPLB(ifname string) (*exec.Cmd, error) {
 		return nil, flaterrors.Join(err, errCtx)
 	}
 
-	stdin.Close()
+	_ = stdin.Close()
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

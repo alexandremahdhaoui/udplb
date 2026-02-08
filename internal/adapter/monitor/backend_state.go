@@ -25,4 +25,22 @@ var _ types.Watcher[types.BackendStatus] = &backendState{}
 //
 // Please see `internal/controller/README.md` to learn more about data
 // kinds, types, signal transduction and pathways.
-type backendState struct{}
+type backendState struct {
+	doneCh chan struct{}
+}
+
+func (b *backendState) Close() error {
+	// TODO: implement
+	close(b.doneCh)
+	return nil
+}
+
+func (b *backendState) Done() <-chan struct{} {
+	return b.doneCh
+}
+
+func (b *backendState) Watch() (<-chan types.BackendStatus, func()) {
+	// TODO: implement
+	ch := make(chan types.BackendStatus)
+	return ch, func() {}
+}

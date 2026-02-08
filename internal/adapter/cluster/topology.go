@@ -19,7 +19,7 @@ package clusteradpater
 // - Should Node holds attributes related to the Topology?
 // (e.g. leader/follower etc...)
 type Node struct {
-	id     any
+	ID     any // TODO: define actual ID type
 	Spec   any
 	Status any
 }
@@ -55,6 +55,17 @@ type Topology interface {
 	recv() // ?
 }
 
-func NewFullyConnectedTopology() Topology
-func NewLeaderTopology() Topology
-func NewRingTopology() Topology
+func NewFullyConnectedTopology() Topology {
+	// TODO: implement
+	panic("unimplemented")
+}
+
+func NewLeaderTopology() Topology {
+	// TODO: implement
+	panic("unimplemented")
+}
+
+func NewRingTopology() Topology {
+	// TODO: implement
+	panic("unimplemented")
+}

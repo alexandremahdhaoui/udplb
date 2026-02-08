@@ -1,0 +1,237 @@
+name: udplb
+artifactStorePath: .forge/artifact-store.yaml
+envFile: .envrc
+
+# ----------------------------------------------------------------------
+# -- test
+test:
+  - name: lint-tags
+    runner: go://go-lint-tags
+    spec:
+      expectedTags: ["unit", "integration", "e2e", "benchmark", "functional"]
+
+  - name: lint-licenses
+    runner: go://generic-test-runner
+    spec:
+      command: "./hack/ensure-licenses.sh"
+
+  - name: lint
+    runner: go://go-lint
+
+  - name: unit
+    runner: go://go-test
+
+  - name: e2e
+    testenv: alias://e2e-testenv
+    runner: go://go-test
+
+# ----------------------------------------------------------------------
+# -- build
+build:
+  # Protobuf compilation
+  # Matches Makefile: protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative <file>
+  - name: generate-protobuf
+    src: ./pkg/apis
+    engine: go://generic-builder
+    spec:
+      command: "sh"
+      args:
+        - "-c"
+        - |
+          for proto in $(find ./pkg/apis -name '*.proto'); do
+            protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative "$proto"
+          done
+
+  # eBPF compilation (standalone build step -- engine needs src/dest)
+  - name: generate-bpf
+    src: ./internal/adapter/bpf/udplb_kern.c
+    dest: ./internal/adapter/bpf
+    engine: go://go-gen-bpf
+    spec:
+      ident: udplb
+      goPackage: bpfadapter
+      outputStem: zz_generated
+      tags: ["linux"]
+
+  # Convenience target: chain protobuf + bpf + go generate
+  - name: generate-all
+    src: .
+    engine: go://generic-builder
+    spec:
+      command: "sh"
+      args:
+        - "-c"
+        - "forge build generate-protobuf && forge build generate-bpf && go generate ./..."
+
+  # Code formatting
+  - name: format
+    src: .
+    engine: go://go-format
+
+  # Binary
+  - name: udplb
+    src: ./cmd/udplb
+    dest: ./build/bin
+    engine: go://go-build
+    spec:
+      env:
+        CGO_ENABLED: "0"
+
+# ----------------------------------------------------------------------
+# -- engines defines reusable build engines with custom configurations
+engines:
+  # E2E test environment using testenv-vm with libvirt
+  - alias: e2e-testenv
+    type: testenv
+    testenv:
+      - engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm@v0.8.2
+        deferTemplates: true
+        spec:
+          # Use /tmp for state directory so libvirt can access disk images
+          stateDir: /tmp/udplb-testenv-vm
+          images:
+            - name: ubuntu
+              spec:
+                source: ubuntu:24.04
+          providers:
+            - name: libvirt
+              engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt@v0.8.2
+              default: true
+              spec: {}
+
+          keys:
+            - name: VmSsh
+              provider: libvirt
+              spec:
+                type: ed25519
+
+          networks:
+            - name: UdplbNet
+              kind: nat
+              provider: libvirt
+              spec:
+                cidr: "192.168.200.0/24"
+                # Disable libvirt DHCP - use static IPs via cloud-init networkConfig
+                dhcp:
+                  enabled: false
+
+          vms:
+            # vm0-lb: Load balancer instance 0
+            - name: vm0-lb
+              provider: libvirt
+              spec:
+                memory: 512
+                vcpus: 1
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.ubuntu.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: vm0-lb
+                  # Static network config - applied before any cloud-init modules run
+                  networkConfig:
+                    ethernets:
+                      - name: ens2
+                        addresses:
+                          - "192.168.200.10/24"
+                        gateway4: "192.168.200.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  packages:
+                    - socat
+                    - curl
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "5m"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
+
+            # vm1-lb: Load balancer instance 1
+            - name: vm1-lb
+              provider: libvirt
+              spec:
+                memory: 512
+                vcpus: 1
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.ubuntu.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: vm1-lb
+                  # Static network config - applied before any cloud-init modules run
+                  networkConfig:
+                    ethernets:
+                      - name: ens2
+                        addresses:
+                          - "192.168.200.11/24"
+                        gateway4: "192.168.200.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  packages:
+                    - socat
+                    - curl
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "5m"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
+
+            # vm2-lb: Load balancer instance 2
+            - name: vm2-lb
+              provider: libvirt
+              spec:
+                memory: 512
+                vcpus: 1
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.ubuntu.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: vm2-lb
+                  # Static network config - applied before any cloud-init modules run
+                  networkConfig:
+                    ethernets:
+                      - name: ens2
+                        addresses:
+                          - "192.168.200.12/24"
+                        gateway4: "192.168.200.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  packages:
+                    - socat
+                    - curl
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "5m"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"

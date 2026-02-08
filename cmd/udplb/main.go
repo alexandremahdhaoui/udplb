@@ -21,8 +21,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	bpfadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/bpf"
+	"github.com/alexandremahdhaoui/udplb/internal/types"
+	"github.com/alexandremahdhaoui/udplb/internal/util"
 	"github.com/google/uuid"
 )
 
@@ -40,14 +43,18 @@ func main() {
 
 	ctx := context.TODO()
 
-	name := "todo"
+	// TODO: these values should come from config
+	_ = "todo" // name placeholder
 	instanceId := uuid.New()
 	iface, _ := net.InterfaceByName("todo")
 	ip := net.ParseIP("todo")
 	port := uint16(12345)
 	lookupTableSize := uint32(23)
 
-	bpfProgram, manager, err := bpfadapter.New(instanceId, iface, ip, port, lookupTableSize)
+	// Create assignment watcher mux for the BPF manager
+	assignmentWatcherMux := util.NewWatcherMux[types.Assignment](100, util.NewDispatchFuncWithTimeout[types.Assignment](time.Second))
+
+	bpfProgram, manager, err := bpfadapter.New(instanceId, iface, ip, port, lookupTableSize, assignmentWatcherMux)
 	if err != nil {
 		errExit(err)
 	}
@@ -62,16 +69,15 @@ func main() {
 		errExit(err)
 	}
 
-	var (
-		bl monitoradapter.backendSpecList
-		bs monitoradapter.backendState
-		ra monitoradapter.remoteAssignment
-	)
-
-	// move those to controller
-	blCh, blCancel := bl.Watch()
-	bsCh, bsCancel := bs.Watch()
-	raCh, raCancel := ra.Watch()
+	// TODO: move monitor adapter integration to controller
+	// var (
+	// 	bl monitoradapter.backendSpecList
+	// 	bs monitoradapter.backendState
+	// 	ra monitoradapter.remoteAssignment
+	// )
+	// blCh, blCancel := bl.Watch()
+	// bsCh, bsCancel := bs.Watch()
+	// raCh, raCancel := ra.Watch()
 }
 
 func fmtExit(format string, a ...any) {
@@ -80,6 +86,6 @@ func fmtExit(format string, a ...any) {
 }
 
 func errExit(err error) {
-	fmt.Fprintf(os.Stderr, err.Error())
+	fmt.Fprintln(os.Stderr, err.Error())
 	os.Exit(1)
 }

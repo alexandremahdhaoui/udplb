@@ -321,7 +321,7 @@ terminate:
 }
 
 func (mgr *dsManager) handleEvent(e *event) {
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	var err error
 
 	switch e.kind {

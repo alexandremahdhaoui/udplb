@@ -50,7 +50,8 @@ func New() VMAgent {
 	panic("unimplemented")
 }
 
-type vmagent struct{}
+// TODO: implement actual vmagent
+// type vmagent struct{}
 
 /******************************************************************************
  * RunVMAgent
@@ -68,6 +69,10 @@ func RunVMAgent(cfg Config) error {
 }
 
 type (
+	// Config is the configuration for the VM agent.
+	// TODO: define actual config fields
+	Config struct{}
+
 	RecorderState string // e.g. Running, Unschedulable, Stopped, Zombie.
 
 	RecorderSpec struct {

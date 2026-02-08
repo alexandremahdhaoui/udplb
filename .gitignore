@@ -32,6 +32,13 @@ go.work.sum
 .ignore*
 ./build/*
 
+# Forge
+.forge/
+/udplb
+/udplb_test
+/tmp
+/.envrc
+
 # ----------------------------- #
 # -- python/jupyter ignores 
 # ----------------------------- #

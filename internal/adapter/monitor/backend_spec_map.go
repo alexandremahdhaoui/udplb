@@ -33,4 +33,22 @@ var _ types.Watcher[BackendSpecMap] = &backendSpecList{}
 
 type BackendSpecMap = map[uuid.UUID]types.BackendSpec
 
-type backendSpecList struct{}
+type backendSpecList struct {
+	doneCh chan struct{}
+}
+
+func (b *backendSpecList) Close() error {
+	// TODO: implement
+	close(b.doneCh)
+	return nil
+}
+
+func (b *backendSpecList) Done() <-chan struct{} {
+	return b.doneCh
+}
+
+func (b *backendSpecList) Watch() (<-chan BackendSpecMap, func()) {
+	// TODO: implement
+	ch := make(chan BackendSpecMap)
+	return ch, func() {}
+}

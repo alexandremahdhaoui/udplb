@@ -79,6 +79,7 @@ func New(
 	ip net.IP,
 	port uint16,
 	lookupTableSize uint32,
+	assignmentWatcherMux *util.WatcherMux[types.Assignment],
 ) (types.Runnable, DataStructureManager, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, nil, flaterrors.Join(err, ErrRemovingMemlock, ErrCreatingNewBPFProgram)
@@ -116,7 +117,7 @@ func New(
 	}
 
 	// -- init & run manager
-	manager := NewDataStructureManager(objs)
+	manager := NewDataStructureManager(objs, assignmentWatcherMux)
 	closePropagationFunc := func() error {
 		return manager.Close()
 	}
@@ -159,7 +160,7 @@ func (r *runnable) Run(ctx context.Context) error {
 	if err != nil {
 		return flaterrors.Join(err, ErrRunningUdplbUserlandProgram)
 	}
-	defer link.Close()
+	defer func() { _ = link.Close() }()
 
 	r.running = true
 	slog.InfoContext(ctx, "XDP program loaded successfully", "ifname", r.iface.Name)
@@ -178,7 +179,7 @@ func (r *runnable) TraceBPF() error {
 		return err
 	}
 
-	defer fd.Close()
+	defer func() { _ = fd.Close() }()
 	go func() {
 		scanner := bufio.NewScanner(fd)
 		scanner.Split(bufio.ScanLines)
