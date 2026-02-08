@@ -21,6 +21,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	bpfadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/bpf"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
@@ -51,19 +52,24 @@ func TestDataStructureManager(t *testing.T) {
 		assignmentFifo = fakebpfstruct.NewFIFO[bpfadapter.Assignment]()
 		sessionMap = fakebpfstruct.NewMap[uuid.UUID, uint32]()
 
+		assignmentWatcherMux := util.NewWatcherMux[types.Assignment](100, util.NewDispatchFuncWithTimeout[types.Assignment](time.Second))
 		mgr = bpfadapter.NewDataStructureManager(bpfadapter.Objects{
 			BackendList:    backendList,
 			LookupTable:    lookupTable,
 			AssignmentFIFO: assignmentFifo,
 			SessionMap:     sessionMap,
-		})
+		}, assignmentWatcherMux)
 
 		// "Subscribe" is called when manager.Run() is called.
 		assignmentFifo.EXPECT("Subscribe", nil)
 		require.NoError(t, mgr.Run(context.Background()))
 
 		return func() {
-			require.NoError(t, mgr.Close())
+			err := mgr.Close()
+			// Manager may already be closed if test triggered internal shutdown
+			if err != nil && err != types.ErrRunnableMustBeRunningToBeClosed {
+				require.NoError(t, err)
+			}
 		}
 	}
 
@@ -109,13 +115,16 @@ func TestDataStructureManager(t *testing.T) {
 			defer setup(t)()
 			setupWatchAssignment(t)
 
+			// Register watcher BEFORE pushing items to avoid race where
+			// items are dispatched to an empty watcher list.
+			ch, cancel := mgr.WatchAssignment()
+			defer cancel()
+
 			go func() {
 				for i := range n {
 					assignmentFifo.Chan <- input[i]
 				}
 			}()
-
-			ch := mgr.WatchAssignment()
 
 			for range n {
 				actual := <-ch
@@ -132,6 +141,11 @@ func TestDataStructureManager(t *testing.T) {
 
 			smallerN := n - 3
 
+			// Register watcher BEFORE pushing items to avoid race where
+			// items are dispatched to an empty watcher list.
+			ch, cancel := mgr.WatchAssignment()
+			defer cancel()
+
 			go func() {
 				for i := range smallerN {
 					assignmentFifo.Chan <- input[i]
@@ -139,8 +153,6 @@ func TestDataStructureManager(t *testing.T) {
 				// channel is closed early after `smallerN` assignments.
 				close(assignmentFifo.Chan)
 			}()
-
-			ch := mgr.WatchAssignment()
 
 			for range smallerN {
 				actual := <-ch
