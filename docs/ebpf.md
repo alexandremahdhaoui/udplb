@@ -1,46 +1,35 @@
-# eBPF 
+# eBPF
 
-## Set up environment
+## Toolchain
 
-Started the project from the following article: 
-https://konghq.com/blog/engineering/writing-an-ebpf-xdp-load-balancer-in-rust
+UDPLB compiles eBPF programs from C source using clang and libbpf headers.
+The cilium/ebpf library's `bpf2go` tool generates Go bindings from the compiled
+bytecode, allowing the Go userspace code to load and interact with eBPF maps
+and programs directly.
 
-Execute the following command to respectively install build essentials,
-nc, ebpftools and rust.
+## Prerequisites
 
-```shell
-❯ sudo apt install build-essential netcat-traditional \
-    linux-tools-common linux-tools-generic "linux-tools-$(uname -r)" \
-    rustup # <- rust
-```
-
-Install requirement for Rust environment:
+Install system packages:
 
 ```shell
-cargo install cargo-generate bpf-linker bindgen-cli
-rustup toolchain install stable
-rustup toolchain install nightly --component rust-src
-
-# To generating C bindings:
-# https://aya-rs.dev/book/aya/aya-tool/
-cargo install --git https://github.com/aya-rs/aya -- aya-tool 
+sudo apt-get install clang libbpf-dev linux-headers-$(uname -r)
 ```
 
-Bootstrap the project:
+Go 1.22+ is required. The `bpf2go` tool installs automatically during the
+forge build step.
+
+## Build
+
+Generate Go bindings from the eBPF C source:
 
 ```shell
-cd rust
-cargo generate --name udplb -d program_type=xdp https://github.com/aya-rs/aya-template
-cd udplb
+forge build generate-bpf
 ```
 
-Run the programm:
+This compiles `internal/adapter/bpf/udplb_kern.c` and produces Go bindings
+at `internal/adapter/bpf/zz_generated*.go`.
 
-```shell
-RUST_LOG=info cargo run --config 'target."cfg(all())".runner="sudo -E"' -- --iface=lo
+## Source Files
 
-# In another window:
-echo -n "01234567890ABCDEF" | nc -u 127.0.0.1 8080 # or ping 127.0.0.1
-```
-
-
+- `udplb_kern.c` -- main XDP program: packet validation, session lookup, header rewrite
+- `udplb_kern_helpers.c` -- helper functions: `must_loadbalance` validation, checksums, `fast_hash`

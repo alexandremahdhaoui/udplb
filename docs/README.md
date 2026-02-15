@@ -1,8 +1,10 @@
-# Internal docs
+# Documentation
 
-[ebpf programming](./ebpf.md)
+UDPLB documentation, organized by audience and depth.
 
-## Architecture
+## Index
 
-![UDP loadbalancer](./04-alternative-network.svg)
-
+- [README](../README.md) -- User guide: quick start, configuration, packet routing
+- [Design Document](../DESIGN.md) -- Architecture, data model, trade-offs, alternatives
+- [eBPF](./ebpf.md) -- eBPF toolchain, prerequisites, and build instructions
+- [ECMP](./ecmp.md) -- ECMP routing references
