@@ -84,7 +84,11 @@ engines:
   - alias: e2e-testenv
     type: testenv
     testenv:
-      - engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm@v0.8.2
+      - engine: go://testenv-stub
+        spec:
+          udpTestPort: '{{ allocateOpenPort "0.0.0.0" "udplb-e2e-udp" 10000 32767 }}'
+
+      - engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm@v0.12.1
         deferTemplates: true
         spec:
           # Use /tmp for state directory so libvirt can access disk images
@@ -95,7 +99,7 @@ engines:
                 source: ubuntu:24.04
           providers:
             - name: libvirt
-              engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt@v0.8.2
+              engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt@v0.12.1
               default: true
               spec: {}
 
@@ -152,7 +156,7 @@ engines:
                 readiness:
                   ssh:
                     enabled: true
-                    timeout: "5m"
+                    timeout: "2m"
                     user: ubuntu
                     privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
 
@@ -192,7 +196,7 @@ engines:
                 readiness:
                   ssh:
                     enabled: true
-                    timeout: "5m"
+                    timeout: "2m"
                     user: ubuntu
                     privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
 
@@ -232,6 +236,6 @@ engines:
                 readiness:
                   ssh:
                     enabled: true
-                    timeout: "5m"
+                    timeout: "2m"
                     user: ubuntu
                     privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"

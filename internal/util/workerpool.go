@@ -36,13 +36,6 @@ func NewFunctionalWorkerPool(
 		go func() {
 			defer wg.Done()
 			for {
-				// if the q is busy, this select ensures the
-				// worker is closed as soon as possible.
-				select {
-				case <-terminateCh:
-					return
-				default:
-				}
 				select {
 				case f, ok := <-q:
 					if !ok { // stop worker if q is closed
@@ -50,7 +43,19 @@ func NewFunctionalWorkerPool(
 					}
 					f()
 				case <-terminateCh:
-					return
+					// Drain remaining items before exiting to avoid
+					// dropping in-flight work during graceful shutdown.
+					for {
+						select {
+						case f, ok := <-q:
+							if !ok {
+								return
+							}
+							f()
+						default:
+							return
+						}
+					}
 				}
 			}
 		}()

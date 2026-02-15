@@ -30,45 +30,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	e2eutil "github.com/alexandremahdhaoui/udplb/pkg/test/e2e"
 )
-
-// TestenvConfig holds configuration for testenv-vm environment.
-type TestenvConfig struct {
-	// VM information - static IPs from forge.yaml cloud-init
-	VM0IP string // vm0-lb: 192.168.200.10
-	VM1IP string // vm1-lb: 192.168.200.11
-	VM2IP string // vm2-lb: 192.168.200.12
-
-	// SSH key information
-	SSHKeyPath string
-
-	// Network information
-	BridgeIP string
-}
-
-// LoadTestenvConfig loads configuration from testenv-vm environment.
-// Uses static IPs configured via cloud-init networkConfig in forge.yaml.
-func LoadTestenvConfig() (*TestenvConfig, error) {
-	cfg := &TestenvConfig{
-		BridgeIP: "192.168.200.1",
-		// Static IPs from forge.yaml cloud-init networkConfig
-		VM0IP: "192.168.200.10",
-		VM1IP: "192.168.200.11",
-		VM2IP: "192.168.200.12",
-	}
-
-	// Try to find SSH key from testenv-vm
-	uid := os.Getuid()
-	keyDir := fmt.Sprintf("/tmp/testenv-vm-%d/keys", uid)
-	keyPath := filepath.Join(keyDir, "VmSsh")
-
-	if _, err := os.Stat(keyPath); err != nil {
-		return nil, fmt.Errorf("SSH key not found at %s - is the test environment running? (forge test create-env e2e)", keyPath)
-	}
-	cfg.SSHKeyPath = keyPath
-
-	return cfg, nil
-}
 
 // runSSHCommand executes a command on a remote VM via SSH.
 func runSSHCommand(ctx context.Context, sshKeyPath, user, host, command string) (string, error) {
@@ -135,7 +99,7 @@ func findUdplbBinary() (string, error) {
 
 // TestUDPLBE2E_VMsReachable tests that all VMs are reachable via SSH.
 func TestUDPLBE2E_VMsReachable(t *testing.T) {
-	cfg, err := LoadTestenvConfig()
+	cfg, err := e2eutil.LoadTestenvConfig()
 	require.NoError(t, err, "testenv configuration must be available - run with 'forge test run e2e'")
 
 	t.Logf("Using testenv configuration:")
@@ -167,7 +131,7 @@ func TestUDPLBE2E_VMsReachable(t *testing.T) {
 
 // TestUDPLBE2E_CopyBinary tests copying the udplb binary to VMs.
 func TestUDPLBE2E_CopyBinary(t *testing.T) {
-	cfg, err := LoadTestenvConfig()
+	cfg, err := e2eutil.LoadTestenvConfig()
 	require.NoError(t, err, "testenv configuration must be available - run with 'forge test run e2e'")
 
 	binaryPath, err := findUdplbBinary()
@@ -206,7 +170,7 @@ func TestUDPLBE2E_CopyBinary(t *testing.T) {
 
 // TestUDPLBE2E_UDPConnectivity tests basic UDP connectivity between VMs.
 func TestUDPLBE2E_UDPConnectivity(t *testing.T) {
-	cfg, err := LoadTestenvConfig()
+	cfg, err := e2eutil.LoadTestenvConfig()
 	require.NoError(t, err, "testenv configuration must be available - run with 'forge test run e2e'")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -218,7 +182,7 @@ func TestUDPLBE2E_UDPConnectivity(t *testing.T) {
 
 	// Start a simple UDP listener on vm1-lb using socat
 	t.Log("Starting UDP listener on vm1-lb...")
-	listenerCmd := "nohup socat -u UDP4-LISTEN:12345,reuseaddr,fork OPEN:/tmp/udp_received.txt,creat,append > /dev/null 2>&1 &"
+	listenerCmd := fmt.Sprintf("nohup socat -u UDP4-LISTEN:%d,reuseaddr,fork OPEN:/tmp/udp_received.txt,creat,append > /dev/null 2>&1 &", e2eutil.UDPTestPort)
 	_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.VM1IP, listenerCmd)
 	require.NoError(t, err, "failed to start UDP listener on vm1-lb")
 
@@ -227,7 +191,7 @@ func TestUDPLBE2E_UDPConnectivity(t *testing.T) {
 
 	// Send a UDP packet from vm0-lb to vm1-lb
 	t.Log("Sending UDP packet from vm0-lb to vm1-lb...")
-	sendCmd := fmt.Sprintf("echo 'hello from vm0' | socat -u - UDP4-SENDTO:%s:12345", cfg.VM1IP)
+	sendCmd := fmt.Sprintf("echo 'hello from vm0' | socat -u - UDP4-SENDTO:%s:%d", cfg.VM1IP, e2eutil.UDPTestPort)
 	_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.VM0IP, sendCmd)
 	require.NoError(t, err, "failed to send UDP packet from vm0-lb")
 
@@ -248,7 +212,7 @@ func TestUDPLBE2E_UDPConnectivity(t *testing.T) {
 
 // TestUDPLBE2E_NetworkInterfaces verifies network interfaces on VMs.
 func TestUDPLBE2E_NetworkInterfaces(t *testing.T) {
-	cfg, err := LoadTestenvConfig()
+	cfg, err := e2eutil.LoadTestenvConfig()
 	require.NoError(t, err, "testenv configuration must be available - run with 'forge test run e2e'")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
