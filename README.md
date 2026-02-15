@@ -177,6 +177,10 @@ UDPLB operates across three layers. The kernel layer runs an XDP program for zer
 
 See [DESIGN.md](./DESIGN.md) for full architecture, trade-offs, and design decisions.
 
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, testing, and commit conventions.
+
 ## License
 
 Apache 2.0. See [LICENSE](./LICENSE).
