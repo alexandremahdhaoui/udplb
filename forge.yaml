@@ -94,9 +94,13 @@ engines:
           # Use /tmp for state directory so libvirt can access disk images
           stateDir: /tmp/udplb-testenv-vm
           images:
-            - name: ubuntu
+            - name: udplb-base
               spec:
                 source: ubuntu:24.04
+                customize:
+                  packages:
+                    - socat
+                    - curl
           providers:
             - name: libvirt
               engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt@v0.12.1
@@ -128,7 +132,7 @@ engines:
                 vcpus: 1
                 network: UdplbNet
                 disk:
-                  baseImage: "{{ .Images.ubuntu.Path }}"
+                  baseImage: "{{ .Images.udplb-base.Path }}"
                   size: 4G
                 cloudInit:
                   hostname: vm0-lb
@@ -142,9 +146,6 @@ engines:
                         nameservers:
                           addresses:
                             - "8.8.8.8"
-                  packages:
-                    - socat
-                    - curl
                   users:
                     - name: ubuntu
                       sudo: "ALL=(ALL) NOPASSWD:ALL"
@@ -168,7 +169,7 @@ engines:
                 vcpus: 1
                 network: UdplbNet
                 disk:
-                  baseImage: "{{ .Images.ubuntu.Path }}"
+                  baseImage: "{{ .Images.udplb-base.Path }}"
                   size: 4G
                 cloudInit:
                   hostname: vm1-lb
@@ -182,9 +183,6 @@ engines:
                         nameservers:
                           addresses:
                             - "8.8.8.8"
-                  packages:
-                    - socat
-                    - curl
                   users:
                     - name: ubuntu
                       sudo: "ALL=(ALL) NOPASSWD:ALL"
@@ -208,7 +206,7 @@ engines:
                 vcpus: 1
                 network: UdplbNet
                 disk:
-                  baseImage: "{{ .Images.ubuntu.Path }}"
+                  baseImage: "{{ .Images.udplb-base.Path }}"
                   size: 4G
                 cloudInit:
                   hostname: vm2-lb
@@ -222,9 +220,6 @@ engines:
                         nameservers:
                           addresses:
                             - "8.8.8.8"
-                  packages:
-                    - socat
-                    - curl
                   users:
                     - name: ubuntu
                       sudo: "ALL=(ALL) NOPASSWD:ALL"
