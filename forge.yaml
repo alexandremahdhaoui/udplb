@@ -88,7 +88,7 @@ engines:
         spec:
           udpTestPort: '{{ allocateOpenPort "0.0.0.0" "udplb-e2e-udp" 10000 32767 }}'
 
-      - engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm@v0.13.0
+      - engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm@v0.14.0
         deferTemplates: true
         spec:
           # Use /tmp for state directory so libvirt can access disk images
@@ -103,7 +103,7 @@ engines:
                     - curl
           providers:
             - name: libvirt
-              engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt@v0.13.0
+              engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt@v0.14.0
               default: true
               spec: {}
 
