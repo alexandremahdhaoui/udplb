@@ -267,3 +267,81 @@ func TestErrorGuards(t *testing.T) {
 		assert.ErrorIs(t, err, types.ErrCannotRunClosedRunnable)
 	})
 }
+
+func TestEventLoopTerminatesOnCmdChannelClose(t *testing.T) {
+	transformFunc := func(obj Entry) (string, uint32, error) {
+		return obj.Key, obj.Value, nil
+	}
+
+	stm, err := statemachineadapter.NewMap(transformFunc)
+	require.NoError(t, err)
+
+	// Create a cmd channel that we control and can close.
+	cmdCh := make(chan []Entry, 10)
+	cmdWAL := mocks.NewMockWAL[Entry](t)
+	cmdWAL.EXPECT().Watch().Return((<-chan []Entry)(cmdCh), func() {}).Once()
+
+	// Snapshot WAL with a channel that stays open.
+	snapCh := make(chan []map[string]uint32, 10)
+	snapshotWAL := mocks.NewMockWAL[map[string]uint32](t)
+	snapshotWAL.EXPECT().Watch().Return((<-chan []map[string]uint32)(snapCh), func() {}).Once()
+
+	watcherMux := util.NewWatcherMux[map[string]uint32](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[map[string]uint32],
+	)
+
+	d := dvds.New[Entry, map[string]uint32](stm, cmdWAL, snapshotWAL, watcherMux)
+
+	err = d.Run(context.Background())
+	require.NoError(t, err)
+
+	// Close the cmd channel to trigger the "!ok" branch in the event loop.
+	close(cmdCh)
+
+	// The event loop should terminate, closing doneCh.
+	select {
+	case <-d.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("doneCh was not closed after cmd channel closed")
+	}
+}
+
+func TestEventLoopTerminatesOnSnapChannelClose(t *testing.T) {
+	transformFunc := func(obj Entry) (string, uint32, error) {
+		return obj.Key, obj.Value, nil
+	}
+
+	stm, err := statemachineadapter.NewMap(transformFunc)
+	require.NoError(t, err)
+
+	// Cmd channel stays open.
+	cmdCh := make(chan []Entry, 10)
+	cmdWAL := mocks.NewMockWAL[Entry](t)
+	cmdWAL.EXPECT().Watch().Return((<-chan []Entry)(cmdCh), func() {}).Once()
+
+	// Create a snapshot channel that we control and can close.
+	snapCh := make(chan []map[string]uint32, 10)
+	snapshotWAL := mocks.NewMockWAL[map[string]uint32](t)
+	snapshotWAL.EXPECT().Watch().Return((<-chan []map[string]uint32)(snapCh), func() {}).Once()
+
+	watcherMux := util.NewWatcherMux[map[string]uint32](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[map[string]uint32],
+	)
+
+	d := dvds.New[Entry, map[string]uint32](stm, cmdWAL, snapshotWAL, watcherMux)
+
+	err = d.Run(context.Background())
+	require.NoError(t, err)
+
+	// Close the snapshot channel to trigger the "!ok" branch in the event loop.
+	close(snapCh)
+
+	// The event loop should terminate, closing doneCh.
+	select {
+	case <-d.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("doneCh was not closed after snapshot channel closed")
+	}
+}

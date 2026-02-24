@@ -18,6 +18,7 @@ package types
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"time"
 )
 
@@ -115,8 +116,8 @@ func TransformProposalIntoWALEntry[T any](
 		WALName:      walName,
 	}
 
-	buf := make([]byte, 0)
-	if _, err := binary.Encode(buf, binary.LittleEndian, out); err != nil {
+	buf, err := json.Marshal(out)
+	if err != nil {
 		return WALEntry[T]{}, err
 	}
 	out.Hash = sha256.Sum256(buf)

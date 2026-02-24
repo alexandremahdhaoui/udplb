@@ -18,6 +18,7 @@
 package statemachineadapter_test
 
 import (
+	"errors"
 	"testing"
 
 	statemachineadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/statemachine"
@@ -173,5 +174,27 @@ func TestMap(t *testing.T) {
 		assert.NotEqual(t, actual0.State(), actual1.State())
 		assert.NotEqual(t, inputStm.State(), actual0.State())
 		assert.NotEqual(t, inputStm.State(), actual1.State())
+	})
+
+	/*******************************************************************************
+	 * NewMap error paths
+	 *
+	 ******************************************************************************/
+	t.Run("NewMap with nil transformFunc returns error", func(t *testing.T) {
+		_, err := statemachineadapter.NewMap[Entry, string, uint32](nil)
+		assert.ErrorIs(t, err, statemachineadapter.ErrTransformFuncMustNotBeNil)
+	})
+
+	t.Run("Execute with transform error", func(t *testing.T) {
+		errTransform := errors.New("transform error")
+		failingTransform := func(obj Entry) (string, uint32, error) {
+			return "", 0, errTransform
+		}
+
+		stm, err := statemachineadapter.NewMap(failingTransform)
+		require.NoError(t, err)
+
+		err = stm.Execute(types.PutCommand, Entry{"key", 1})
+		assert.ErrorIs(t, err, errTransform)
 	})
 }

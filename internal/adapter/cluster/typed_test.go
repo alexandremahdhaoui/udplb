@@ -19,6 +19,7 @@ package clusteradpater
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -402,4 +403,156 @@ func TestTypedCluster_Done(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("doneCh was not closed after Close()")
 	}
+}
+
+/*******************************************************************************
+ * Tests: Run when raw.Send() fails
+ *
+ ******************************************************************************/
+
+func TestTypedCluster_Run_SendError(t *testing.T) {
+	m := mocks.NewMockCluster[types.RawData](t)
+	sendErr := errors.New("send registration failed")
+	m.EXPECT().Send(testifymock.Anything).Return(sendErr)
+
+	recvMux := util.NewWatcherMux[testPayload](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[testPayload],
+	)
+	tc := New[testPayload](m, recvMux).(*typedCluster[testPayload])
+
+	err := tc.Run(context.Background())
+	assert.ErrorIs(t, err, sendErr)
+}
+
+/*******************************************************************************
+ * Tests: decodeLoop exits when rawRecvCh is closed
+ *
+ ******************************************************************************/
+
+func TestTypedCluster_DecodeLoop_ChannelClosed(t *testing.T) {
+	tc, h := newTypedClusterForTest(t)
+
+	err := tc.Run(context.Background())
+	require.NoError(t, err)
+
+	// Close the raw recv channel. This simulates the raw cluster shutting down.
+	close(h.rawRecvCh)
+
+	// The decodeLoop should exit, closing doneCh.
+	select {
+	case <-tc.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("doneCh was not closed after rawRecvCh was closed")
+	}
+}
+
+/*******************************************************************************
+ * Tests: Send goroutine exits when input channel is closed
+ *
+ ******************************************************************************/
+
+func TestTypedCluster_Send_ChannelClosed(t *testing.T) {
+	tc, h := newTypedClusterForTest(t)
+
+	err := tc.Run(context.Background())
+	require.NoError(t, err)
+	defer tc.Close()
+
+	sendCh := make(chan testPayload, 1)
+	err = tc.Send(sendCh)
+	require.NoError(t, err)
+
+	// Send a value then close the channel.
+	sendCh <- testPayload{Name: "last", Value: 99}
+	close(sendCh)
+
+	// The sent value should arrive on the raw send channel.
+	raw := h.readSent(t, 2*time.Second)
+	assert.JSONEq(t, `{"name":"last","value":99}`, string(raw))
+}
+
+/*******************************************************************************
+ * Tests: Send goroutine handles marshal error (channel type)
+ *
+ ******************************************************************************/
+
+// unmarshalable is a type that causes json.Marshal to fail.
+type unmarshalable struct {
+	Ch chan int `json:"ch"`
+}
+
+func TestTypedCluster_Send_MarshalError(t *testing.T) {
+	// Create a typedCluster[unmarshalable] to trigger json.Marshal errors.
+	m := mocks.NewMockCluster[types.RawData](t)
+
+	rawRecvCh := make(chan types.RawData, 64)
+	m.EXPECT().Send(testifymock.Anything).Return(nil).Maybe()
+	m.EXPECT().Recv().Return((<-chan types.RawData)(rawRecvCh), func() {}).Maybe()
+
+	recvMux := util.NewWatcherMux[unmarshalable](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[unmarshalable],
+	)
+	tc := New[unmarshalable](m, recvMux).(*typedCluster[unmarshalable])
+
+	err := tc.Run(context.Background())
+	require.NoError(t, err)
+	defer tc.Close()
+
+	sendCh := make(chan unmarshalable, 2)
+	err = tc.Send(sendCh)
+	require.NoError(t, err)
+
+	// Send an unmarshalable value (channel type cannot be marshaled).
+	sendCh <- unmarshalable{Ch: make(chan int)}
+
+	// Give the goroutine time to process and log the error.
+	time.Sleep(100 * time.Millisecond)
+
+	// Now send a closable signal to prove the goroutine is still alive.
+	close(sendCh)
+
+	// Small delay to let goroutine process close.
+	time.Sleep(50 * time.Millisecond)
+}
+
+/*******************************************************************************
+ * Tests: Send goroutine exits when terminateCh is closed during rawSendCh write
+ *
+ ******************************************************************************/
+
+func TestTypedCluster_Send_TerminateDuringSend(t *testing.T) {
+	// Use a mock that captures the send channel but never reads from it,
+	// causing the inner select to block on rawSendCh.
+	m := mocks.NewMockCluster[types.RawData](t)
+
+	rawRecvCh := make(chan types.RawData, 64)
+	m.EXPECT().Send(testifymock.Anything).Return(nil).Maybe()
+	m.EXPECT().Recv().Return((<-chan types.RawData)(rawRecvCh), func() {}).Maybe()
+
+	recvMux := util.NewWatcherMux[testPayload](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[testPayload],
+	)
+	tc := New[testPayload](m, recvMux).(*typedCluster[testPayload])
+
+	err := tc.Run(context.Background())
+	require.NoError(t, err)
+
+	// Create an unbuffered send channel and a custom Send that won't drain rawSendCh.
+	sendCh := make(chan testPayload, 1)
+	err = tc.Send(sendCh)
+	require.NoError(t, err)
+
+	// Fill the rawSendCh so the inner select blocks.
+	// rawSendCh is unbuffered (created in New), so the first write will block.
+	sendCh <- testPayload{Name: "blocked", Value: 1}
+
+	// Give the goroutine time to pick up the value and block on rawSendCh.
+	time.Sleep(50 * time.Millisecond)
+
+	// Close terminates the cluster, which closes terminateCh.
+	err = tc.Close()
+	require.NoError(t, err)
 }

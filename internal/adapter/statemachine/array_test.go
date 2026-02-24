@@ -217,4 +217,102 @@ func TestArray(t *testing.T) {
 		assert.NotEqual(t, input.State(), actual0.State())
 		assert.NotEqual(t, input.State(), actual1.State())
 	})
+
+	/*******************************************************************************
+	 * Execute edge cases for array
+	 *
+	 ******************************************************************************/
+	t.Run("ExecuteEdgeCases", func(t *testing.T) {
+		t.Run("Put with nil filter returns ErrOperationRequiresAFilterFunc", func(t *testing.T) {
+			stm, err := statemachineadapter.NewArray[uint32](nil)
+			require.NoError(t, err)
+			err = stm.Execute(types.PutCommand, uint32(1))
+			assert.ErrorIs(t, err, statemachineadapter.ErrOperationRequiresAFilterFunc)
+		})
+
+		t.Run("Delete with nil filter returns ErrOperationRequiresAFilterFunc", func(t *testing.T) {
+			stm, err := statemachineadapter.NewArray[uint32](nil)
+			require.NoError(t, err)
+			err = stm.Execute(types.DeleteCommand, uint32(1))
+			assert.ErrorIs(t, err, statemachineadapter.ErrOperationRequiresAFilterFunc)
+		})
+
+		t.Run("Delete returns ErrNotFound when no match", func(t *testing.T) {
+			filterFunc := func(obj, entry Entry) bool {
+				return obj.Key == entry.Key
+			}
+			opt := statemachineadapter.WithInitialState[Entry]([]Entry{
+				{Key: 1, Value: 10},
+				{Key: 2, Value: 20},
+			})
+			stm, err := statemachineadapter.NewArray(filterFunc, opt)
+			require.NoError(t, err)
+
+			// Delete key that does not exist.
+			err = stm.Execute(types.DeleteCommand, Entry{Key: 99, Value: 0})
+			assert.ErrorIs(t, err, types.ErrNotFound)
+		})
+
+		t.Run("Delete middle element preserves prefix and suffix", func(t *testing.T) {
+			filterFunc := func(obj, entry Entry) bool {
+				return obj.Key == entry.Key
+			}
+			opt := statemachineadapter.WithInitialState[Entry]([]Entry{
+				{Key: 1, Value: 10},
+				{Key: 2, Value: 20},
+				{Key: 3, Value: 30},
+			})
+			stm, err := statemachineadapter.NewArray(filterFunc, opt)
+			require.NoError(t, err)
+
+			// Delete the middle element (i > 0, i < len-1).
+			err = stm.Execute(types.DeleteCommand, Entry{Key: 2, Value: 0})
+			require.NoError(t, err)
+
+			state := stm.State()
+			assert.Len(t, state, 2)
+			assert.Equal(t, Entry{Key: 1, Value: 10}, state[0])
+			assert.Equal(t, Entry{Key: 3, Value: 30}, state[1])
+		})
+
+		t.Run("Delete last element in array", func(t *testing.T) {
+			filterFunc := func(obj, entry Entry) bool {
+				return obj.Key == entry.Key
+			}
+			opt := statemachineadapter.WithInitialState[Entry]([]Entry{
+				{Key: 1, Value: 10},
+				{Key: 2, Value: 20},
+			})
+			stm, err := statemachineadapter.NewArray(filterFunc, opt)
+			require.NoError(t, err)
+
+			// Delete the last element (i == len-1, so the suffix append is skipped).
+			err = stm.Execute(types.DeleteCommand, Entry{Key: 2, Value: 0})
+			require.NoError(t, err)
+
+			state := stm.State()
+			assert.Len(t, state, 1)
+			assert.Equal(t, Entry{Key: 1, Value: 10}, state[0])
+		})
+
+		t.Run("Delete first element in array", func(t *testing.T) {
+			filterFunc := func(obj, entry Entry) bool {
+				return obj.Key == entry.Key
+			}
+			opt := statemachineadapter.WithInitialState[Entry]([]Entry{
+				{Key: 1, Value: 10},
+				{Key: 2, Value: 20},
+			})
+			stm, err := statemachineadapter.NewArray(filterFunc, opt)
+			require.NoError(t, err)
+
+			// Delete the first element (i == 0, so prefix is empty).
+			err = stm.Execute(types.DeleteCommand, Entry{Key: 1, Value: 0})
+			require.NoError(t, err)
+
+			state := stm.State()
+			assert.Len(t, state, 1)
+			assert.Equal(t, Entry{Key: 2, Value: 20}, state[0])
+		})
+	})
 }

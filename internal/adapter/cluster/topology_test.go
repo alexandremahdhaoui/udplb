@@ -129,3 +129,15 @@ func TestFullyConnectedTopology(t *testing.T) {
 		assert.ElementsMatch(t, []uuid.UUID{id1, id2}, peerIDs)
 	})
 }
+
+func TestNewLeaderTopology_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		clusteradpater.NewLeaderTopology()
+	})
+}
+
+func TestNewRingTopology_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		clusteradpater.NewRingTopology()
+	})
+}

@@ -203,19 +203,14 @@ func TestCounter(t *testing.T) {
 	 *
 	 ******************************************************************************/
 	t.Run("State", func(t *testing.T) {
-		input := []uint32{0, 1, 2}
+		var initialVal int64 = 42
+		opt := statemachineadapter.WithInitialState[int64, int64](initialVal)
 
-		opt := statemachineadapter.WithInitialState[uint32](input)
-		stm, err := statemachineadapter.NewArray(nil, opt)
-		assert.NoError(t, err)
+		stm, err := statemachineadapter.NewCounter(opt)
+		require.NoError(t, err)
 
-		// -- State are equal
 		actual := stm.State()
-		assert.Equal(t, input, actual)
-
-		// -- States are mutually immutable
-		actual[0] = 0x1337
-		assert.NotEqual(t, input[0], actual[0])
+		assert.Equal(t, initialVal, actual)
 	})
 
 	/*******************************************************************************
@@ -223,24 +218,53 @@ func TestCounter(t *testing.T) {
 	 *
 	 ******************************************************************************/
 	t.Run("DeepCopy", func(t *testing.T) {
-		opt := statemachineadapter.WithInitialState[uint32]([]uint32{0, 1, 2})
-		input, err := statemachineadapter.NewArray(nil, opt)
-		assert.NoError(t, err)
+		t.Run("basic deep copy preserves state", func(t *testing.T) {
+			var initialVal int64 = 100
+			opt := statemachineadapter.WithInitialState[int64, int64](initialVal)
+			input, err := statemachineadapter.NewCounter(opt)
+			require.NoError(t, err)
 
-		// -- State are equal
-		actual0 := input.DeepCopy()
-		actual1 := input.DeepCopy()
-		assert.Equal(t, input, actual0)
-		assert.Equal(t, input, actual1)
+			actual := input.DeepCopy()
+			assert.Equal(t, input.State(), actual.State())
+		})
 
-		// -- States are mutually immutable
-		err = actual0.Execute(types.AppendCommand, 3)
-		assert.NoError(t, err)
-		err = actual1.Execute(types.AppendCommand, 0x1337)
-		assert.NoError(t, err)
+		t.Run("deep copy with max and min val", func(t *testing.T) {
+			input, err := statemachineadapter.NewCounter(
+				statemachineadapter.WithInitialState[int64, int64](50),
+				statemachineadapter.CounterWithMaximumValue(100),
+				statemachineadapter.CounterWithMinimumValue(0),
+			)
+			require.NoError(t, err)
 
-		assert.NotEqual(t, actual0.State(), actual1.State())
-		assert.NotEqual(t, input.State(), actual0.State())
-		assert.NotEqual(t, input.State(), actual1.State())
+			copied := input.DeepCopy()
+			assert.Equal(t, input.State(), copied.State())
+
+			// The copy should be independent: mutating the copy
+			// should not affect the original.
+			err = copied.Execute(types.AddCommand, 10)
+			require.NoError(t, err)
+			assert.Equal(t, int64(60), copied.State())
+			assert.Equal(t, int64(50), input.State())
+		})
+
+		t.Run("deep copy without max/min val", func(t *testing.T) {
+			input, err := statemachineadapter.NewCounter(
+				statemachineadapter.WithInitialState[int64, int64](10),
+			)
+			require.NoError(t, err)
+
+			copied := input.DeepCopy()
+			assert.Equal(t, int64(10), copied.State())
+		})
+	})
+
+	/*******************************************************************************
+	 * Subtract negative input
+	 *
+	 ******************************************************************************/
+	t.Run("SubtractNegativeInput", func(t *testing.T) {
+		setup(t, nil)
+		err := stm.Execute(types.SubtractCommand, -1)
+		assert.ErrorIs(t, err, statemachineadapter.ErrInputMustBeAPositiveInteger)
 	})
 }

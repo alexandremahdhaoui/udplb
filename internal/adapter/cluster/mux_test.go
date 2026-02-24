@@ -19,7 +19,9 @@ package clusteradpater
 
 import (
 	"context"
+	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +31,49 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+/*******************************************************************************
+ * Mock Protocol / Listener / Conn for error-path tests
+ *
+ ******************************************************************************/
+
+type mockListener struct {
+	readFromFunc        func([]byte) (int, net.Addr, error)
+	closeFunc           func() error
+	localAddrFunc       func() net.Addr
+	setReadDeadlineFunc func(time.Time) error
+}
+
+func (m *mockListener) ReadFrom(buf []byte) (int, net.Addr, error) { return m.readFromFunc(buf) }
+func (m *mockListener) Close() error                               { return m.closeFunc() }
+func (m *mockListener) LocalAddr() net.Addr                        { return m.localAddrFunc() }
+func (m *mockListener) SetReadDeadline(t time.Time) error          { return m.setReadDeadlineFunc(t) }
+
+type mockConn struct {
+	writeFunc      func([]byte) (int, error)
+	closeFunc      func() error
+	remoteAddrFunc func() net.Addr
+}
+
+func (m *mockConn) Write(data []byte) (int, error) { return m.writeFunc(data) }
+func (m *mockConn) Close() error                   { return m.closeFunc() }
+func (m *mockConn) RemoteAddr() net.Addr           { return m.remoteAddrFunc() }
+
+type mockProtocol struct {
+	listenFunc func(string) (Listener, error)
+	dialFunc   func(string) (Conn, error)
+}
+
+func (m *mockProtocol) Listen(addr string) (Listener, error) { return m.listenFunc(addr) }
+func (m *mockProtocol) Dial(addr string) (Conn, error)       { return m.dialFunc(addr) }
+
+type mockTopology struct {
+	nextPeersFunc func(uuid.UUID, map[uuid.UUID]Node) ([]Node, error)
+}
+
+func (m *mockTopology) NextPeers(self uuid.UUID, nodes map[uuid.UUID]Node) ([]Node, error) {
+	return m.nextPeersFunc(self, nodes)
+}
 
 // newTestMux creates a clusterMux with real UDP protocol on localhost:0 for testing.
 func newTestMux(t *testing.T) *clusterMux {
@@ -324,4 +369,332 @@ func TestClusterMux_RecvLoop_CopiesBuffer(t *testing.T) {
 	}
 
 	assert.ElementsMatch(t, []string{"message-one", "message-two"}, received)
+}
+
+/*******************************************************************************
+ * Tests: mux.Run when protocol.Listen fails
+ *
+ ******************************************************************************/
+
+func TestClusterMux_Run_ListenError(t *testing.T) {
+	listenErr := errors.New("listen failed")
+	proto := &mockProtocol{
+		listenFunc: func(string) (Listener, error) {
+			return nil, listenErr
+		},
+		dialFunc: func(string) (Conn, error) { return nil, nil },
+	}
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	mux := NewMux(uuid.New(), "127.0.0.1:0", proto, NewFullyConnectedTopology(), recvMux)
+
+	err := mux.Run(context.Background())
+	assert.ErrorIs(t, err, listenErr)
+}
+
+/*******************************************************************************
+ * Tests: sendLoop error paths (NextPeers error, Dial error, Write error)
+ *
+ ******************************************************************************/
+
+func TestClusterMux_SendLoop_NextPeersError(t *testing.T) {
+	// Use a mock topology that returns an error from NextPeers.
+	topo := &mockTopology{
+		nextPeersFunc: func(uuid.UUID, map[uuid.UUID]Node) ([]Node, error) {
+			return nil, errors.New("topology error")
+		},
+	}
+
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	nodeId := uuid.New()
+	mux := NewMux(nodeId, "127.0.0.1:0", NewUDPProtocol(), topo, recvMux).(*clusterMux)
+
+	// Add a node so sendLoop actually tries to send.
+	peerId := uuid.New()
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9999")
+	mux.nodes[peerId] = Node{ID: peerId, Addr: addr}
+
+	sendCh := make(chan []byte, 1)
+	err := mux.Send(sendCh)
+	require.NoError(t, err)
+
+	err = mux.Run(context.Background())
+	require.NoError(t, err)
+	defer mux.Close()
+
+	// Send data; the sendLoop will call NextPeers which errors.
+	// This should not crash, just log an error.
+	sendCh <- []byte("test")
+
+	// Give the goroutine time to process.
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestClusterMux_SendLoop_DialError(t *testing.T) {
+	dialErr := errors.New("dial failed")
+	proto := &mockProtocol{
+		listenFunc: func(addr string) (Listener, error) {
+			return net.ListenPacket("udp", addr)
+		},
+		dialFunc: func(string) (Conn, error) {
+			return nil, dialErr
+		},
+	}
+
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	nodeId := uuid.New()
+	mux := NewMux(nodeId, "127.0.0.1:0", proto, NewFullyConnectedTopology(), recvMux).(*clusterMux)
+
+	// Add a peer so NextPeers returns it.
+	peerId := uuid.New()
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9999")
+	mux.nodes[peerId] = Node{ID: peerId, Addr: addr}
+
+	sendCh := make(chan []byte, 1)
+	err := mux.Send(sendCh)
+	require.NoError(t, err)
+
+	err = mux.Run(context.Background())
+	require.NoError(t, err)
+	defer mux.Close()
+
+	// Send data; the sendLoop will call Dial which errors.
+	sendCh <- []byte("test")
+
+	// Give the goroutine time to process.
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestClusterMux_SendLoop_WriteError(t *testing.T) {
+	writeErr := errors.New("write failed")
+
+	proto := &mockProtocol{
+		listenFunc: func(addr string) (Listener, error) {
+			return net.ListenPacket("udp", addr)
+		},
+		dialFunc: func(string) (Conn, error) {
+			return &mockConn{
+				writeFunc:      func([]byte) (int, error) { return 0, writeErr },
+				closeFunc:      func() error { return nil },
+				remoteAddrFunc: func() net.Addr { a, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9999"); return a },
+			}, nil
+		},
+	}
+
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	nodeId := uuid.New()
+	mux := NewMux(nodeId, "127.0.0.1:0", proto, NewFullyConnectedTopology(), recvMux).(*clusterMux)
+
+	// Add a peer so NextPeers returns it.
+	peerId := uuid.New()
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9999")
+	mux.nodes[peerId] = Node{ID: peerId, Addr: addr}
+
+	sendCh := make(chan []byte, 1)
+	err := mux.Send(sendCh)
+	require.NoError(t, err)
+
+	err = mux.Run(context.Background())
+	require.NoError(t, err)
+	defer mux.Close()
+
+	// Send data; the sendLoop will dial successfully but Write will error.
+	sendCh <- []byte("test")
+
+	// Give the goroutine time to process.
+	time.Sleep(100 * time.Millisecond)
+}
+
+/*******************************************************************************
+ * Tests: getOrDialConn returns existing connection
+ *
+ ******************************************************************************/
+
+func TestClusterMux_GetOrDialConn_ExistingConn(t *testing.T) {
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	mux := NewMux(uuid.New(), "127.0.0.1:0", NewUDPProtocol(), NewFullyConnectedTopology(), recvMux).(*clusterMux)
+
+	// Pre-populate a connection in the conns map.
+	peerId := uuid.New()
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9999")
+	existingConn := &mockConn{
+		writeFunc:      func([]byte) (int, error) { return 0, nil },
+		closeFunc:      func() error { return nil },
+		remoteAddrFunc: func() net.Addr { return addr },
+	}
+	mux.conns[peerId] = existingConn
+
+	// getOrDialConn should return the existing connection without dialing.
+	conn, err := mux.getOrDialConn(Node{ID: peerId, Addr: addr})
+	require.NoError(t, err)
+	assert.Equal(t, existingConn, conn)
+}
+
+/*******************************************************************************
+ * Tests: getOrDialConn dial error
+ *
+ ******************************************************************************/
+
+func TestClusterMux_GetOrDialConn_DialError(t *testing.T) {
+	dialErr := errors.New("dial error")
+	proto := &mockProtocol{
+		listenFunc: func(string) (Listener, error) { return nil, nil },
+		dialFunc:   func(string) (Conn, error) { return nil, dialErr },
+	}
+
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	mux := NewMux(uuid.New(), "127.0.0.1:0", proto, NewFullyConnectedTopology(), recvMux).(*clusterMux)
+
+	peerId := uuid.New()
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9999")
+
+	conn, err := mux.getOrDialConn(Node{ID: peerId, Addr: addr})
+	assert.Nil(t, conn)
+	assert.ErrorIs(t, err, dialErr)
+}
+
+/*******************************************************************************
+ * Tests: recvLoop error paths (SetReadDeadline error, non-timeout read error)
+ *
+ ******************************************************************************/
+
+func TestClusterMux_RecvLoop_SetReadDeadlineError(t *testing.T) {
+	// Use a mock listener that fails SetReadDeadline, then succeeds,
+	// then returns data.
+	var mu sync.Mutex
+	callCount := 0
+	terminateCh := make(chan struct{})
+
+	listener := &mockListener{
+		setReadDeadlineFunc: func(time.Time) error {
+			mu.Lock()
+			callCount++
+			c := callCount
+			mu.Unlock()
+			if c == 1 {
+				return errors.New("deadline error")
+			}
+			return nil
+		},
+		readFromFunc: func(buf []byte) (int, net.Addr, error) {
+			// After the deadline error, block until terminate.
+			<-terminateCh
+			return 0, nil, errors.New("closed")
+		},
+		closeFunc:     func() error { return nil },
+		localAddrFunc: func() net.Addr { a, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0"); return a },
+	}
+
+	proto := &mockProtocol{
+		listenFunc: func(string) (Listener, error) { return listener, nil },
+		dialFunc:   func(string) (Conn, error) { return nil, nil },
+	}
+
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	mux := NewMux(uuid.New(), "127.0.0.1:0", proto, NewFullyConnectedTopology(), recvMux).(*clusterMux)
+
+	err := mux.Run(context.Background())
+	require.NoError(t, err)
+
+	// Give the recvLoop time to hit the SetReadDeadline error.
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify it continued running (didn't crash).
+	close(terminateCh)
+	err = mux.Close()
+	require.NoError(t, err)
+}
+
+func TestClusterMux_RecvLoop_NonTimeoutReadError(t *testing.T) {
+	// Use a mock listener that returns a non-timeout error on ReadFrom.
+	callCount := 0
+	var mu sync.Mutex
+	terminateCh := make(chan struct{})
+
+	listener := &mockListener{
+		setReadDeadlineFunc: func(time.Time) error { return nil },
+		readFromFunc: func(buf []byte) (int, net.Addr, error) {
+			mu.Lock()
+			callCount++
+			c := callCount
+			mu.Unlock()
+			if c == 1 {
+				// Return a non-timeout error.
+				return 0, nil, errors.New("non-timeout read error")
+			}
+			// Block until terminate.
+			<-terminateCh
+			return 0, nil, errors.New("closed")
+		},
+		closeFunc:     func() error { return nil },
+		localAddrFunc: func() net.Addr { a, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0"); return a },
+	}
+
+	proto := &mockProtocol{
+		listenFunc: func(string) (Listener, error) { return listener, nil },
+		dialFunc:   func(string) (Conn, error) { return nil, nil },
+	}
+
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	mux := NewMux(uuid.New(), "127.0.0.1:0", proto, NewFullyConnectedTopology(), recvMux).(*clusterMux)
+
+	err := mux.Run(context.Background())
+	require.NoError(t, err)
+
+	// Give the recvLoop time to hit the non-timeout read error.
+	time.Sleep(100 * time.Millisecond)
+
+	close(terminateCh)
+	err = mux.Close()
+	require.NoError(t, err)
+}
+
+/*******************************************************************************
+ * Tests: sendLoop exits when source channel is closed
+ *
+ ******************************************************************************/
+
+func TestClusterMux_SendLoop_SourceChannelClosed(t *testing.T) {
+	recvMux := util.NewWatcherMux[types.RawData](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.RawData],
+	)
+	mux := NewMux(uuid.New(), "127.0.0.1:0", NewUDPProtocol(), NewFullyConnectedTopology(), recvMux).(*clusterMux)
+
+	sendCh := make(chan []byte, 1)
+	err := mux.Send(sendCh)
+	require.NoError(t, err)
+
+	err = mux.Run(context.Background())
+	require.NoError(t, err)
+	defer mux.Close()
+
+	// Close the source channel. The merge goroutine should exit gracefully.
+	close(sendCh)
+
+	// Give the goroutine time to process.
+	time.Sleep(100 * time.Millisecond)
 }
