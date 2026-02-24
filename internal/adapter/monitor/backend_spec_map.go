@@ -16,7 +16,13 @@
 package monitoradapter
 
 import (
+	"fmt"
+	"log/slog"
+	"net"
+	"sync"
+
 	"github.com/alexandremahdhaoui/udplb/internal/types"
+	"github.com/alexandremahdhaoui/udplb/internal/util"
 
 	"github.com/google/uuid"
 )
@@ -34,21 +40,80 @@ var _ types.Watcher[BackendSpecMap] = &backendSpecList{}
 type BackendSpecMap = map[uuid.UUID]types.BackendSpec
 
 type backendSpecList struct {
-	doneCh chan struct{}
+	specMap     BackendSpecMap
+	watcherMux  *util.WatcherMux[BackendSpecMap]
+	doneCh      chan struct{}
+	terminateCh chan struct{}
+	dispatched  bool
+	mu          *sync.Mutex
+}
+
+// NewBackendSpecList parses config.Backends into a BackendSpecMap and
+// returns a watcher that dispatches the map on the first Watch call.
+func NewBackendSpecList(config types.Config, watcherMux *util.WatcherMux[BackendSpecMap]) *backendSpecList {
+	specMap := make(BackendSpecMap)
+
+	for _, bc := range config.Backends {
+		if !bc.Enabled {
+			continue
+		}
+
+		ip := net.ParseIP(bc.IP)
+		if ip == nil {
+			slog.Warn("skipping backend with invalid IP",
+				"ip", bc.IP, "port", bc.Port)
+			continue
+		}
+
+		mac, err := net.ParseMAC(bc.MAC)
+		if err != nil {
+			slog.Warn("skipping backend with invalid MAC",
+				"mac", bc.MAC, "ip", bc.IP, "port", bc.Port, "err", err)
+			continue
+		}
+
+		id := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(fmt.Sprintf("%s:%d", bc.IP, bc.Port)))
+		specMap[id] = types.BackendSpec{
+			IP:      ip,
+			Port:    bc.Port,
+			MacAddr: mac,
+			State:   types.StateAvailable,
+		}
+	}
+
+	return &backendSpecList{
+		specMap:     specMap,
+		watcherMux:  watcherMux,
+		doneCh:      make(chan struct{}),
+		terminateCh: make(chan struct{}),
+		dispatched:  false,
+		mu:          &sync.Mutex{},
+	}
+}
+
+func (b *backendSpecList) Watch() (<-chan BackendSpecMap, func()) {
+	ch, cancel := b.watcherMux.Watch(util.NoFilter)
+
+	b.mu.Lock()
+	if !b.dispatched {
+		b.dispatched = true
+		specMap := b.specMap
+		go func() {
+			b.watcherMux.Dispatch(specMap)
+		}()
+	}
+	b.mu.Unlock()
+
+	return ch, cancel
 }
 
 func (b *backendSpecList) Close() error {
-	// TODO: implement
+	close(b.terminateCh)
+	_ = b.watcherMux.Close()
 	close(b.doneCh)
 	return nil
 }
 
 func (b *backendSpecList) Done() <-chan struct{} {
 	return b.doneCh
-}
-
-func (b *backendSpecList) Watch() (<-chan BackendSpecMap, func()) {
-	// TODO: implement
-	ch := make(chan BackendSpecMap)
-	return ch, func() {}
 }

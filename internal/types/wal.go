@@ -19,8 +19,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type (
@@ -58,6 +56,9 @@ type WALEntry[T any] struct {
 	Key string
 	// Data is the data of type T.
 	Data T
+	// Verb tells the DVDS event loop which command to execute on the state
+	// machine (e.g. Put vs Delete).
+	Verb StateMachineCommand
 
 	// The timestamp ensures the proposed entries are consented in the right
 	// order. The timestamp allows the observer WALEntries to process them in
@@ -81,24 +82,28 @@ type WALEntry[T any] struct {
 type Suggestion[T any] struct {
 	Key  string
 	Data T
+	Verb StateMachineCommand
 }
 
 // Creates a WALEntry[T] of type Standard.
 func NewProposal[T any](
 	key string,
 	data T,
+	verb StateMachineCommand,
 ) Suggestion[T] {
 	return Suggestion[T]{
 		Key:  key,
 		Data: data,
+		Verb: verb,
 	}
 }
 
 // Create a new Entry from an accepted Proposal.
 func TransformProposalIntoWALEntry[T any](
-	walId uuid.UUID,
+	walName string,
 	previousHash [32]byte,
 	proposal Suggestion[T],
+	verb StateMachineCommand,
 ) (WALEntry[T], error) {
 	out := WALEntry[T]{
 		PreviousHash: previousHash,
@@ -106,11 +111,13 @@ func TransformProposalIntoWALEntry[T any](
 		Timestamp:    time.Now(),
 		Key:          proposal.Key,
 		Data:         proposal.Data,
+		Verb:         verb,
+		WALName:      walName,
 	}
 
 	buf := make([]byte, 0)
 	if _, err := binary.Encode(buf, binary.LittleEndian, out); err != nil {
-		return WALEntry[T]{}, nil
+		return WALEntry[T]{}, err
 	}
 	out.Hash = sha256.Sum256(buf)
 
@@ -123,9 +130,11 @@ func RawWALEntryInto[T any](
 	out := WALEntry[T]{
 		Hash:         in.Hash,
 		PreviousHash: in.PreviousHash,
+		ProposalHash: in.ProposalHash,
 		Timestamp:    in.Timestamp,
 		Key:          in.Key,
 		WALName:      in.WALName,
+		Verb:         in.Verb,
 		Data:         *new(T),
 	}
 

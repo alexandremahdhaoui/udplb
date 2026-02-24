@@ -62,6 +62,18 @@ type BackendStatus struct {
 }
 
 /*******************************************************************************
+ * BackendStatusEntry
+ *
+ ******************************************************************************/
+
+// BackendStatusEntry associates a backend ID with its current state.
+// Used by the backendState monitor and the BackendStatus DVDS.
+type BackendStatusEntry struct {
+	BackendId uuid.UUID
+	State     State
+}
+
+/*******************************************************************************
  * Backend
  *
  ******************************************************************************/

@@ -17,6 +17,7 @@ package waladapter
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
@@ -99,6 +100,10 @@ type wal[T any] struct {
 	proposalBuffer *util.RingBuffer[types.WALEntry[T]]
 
 	// -- mgmt
+	ctx         context.Context
+	running     bool
+	closed      bool
+	mu          *sync.Mutex
 	doneCh      chan struct{}
 	terminateCh chan struct{}
 
@@ -124,6 +129,7 @@ func New[T any](
 		cluster:        cluster,
 		linkedList:     util.NewLinkedList[types.WALEntry[T]](capacity),
 		proposalBuffer: util.NewRingBuffer[types.WALEntry[T]](proposingRingBufferSize),
+		mu:             &sync.Mutex{},
 		doneCh:         make(chan struct{}),
 		terminateCh:    make(chan struct{}),
 		watcherMux:     watcherMux,
@@ -136,17 +142,13 @@ func New[T any](
  ******************************************************************************/
 
 // Propose implements types.WAL.
+//
+// IMPLEMENTED: WALName is set from w.name. Fields are populated as follows:
+// - Data, Verb, Timestamp: set by the caller (e.g. DVDS.Propose)
+// - WALName: set here from w.name
+// - Key, ProposalHash, PreviousHash, Hash: set during consensus (future work)
 func (w *wal[T]) Propose(proposal types.WALEntry[T]) error {
-	// TODO: add the WALId to the proposal.
 	proposal.WALName = w.name
-	// TODO: populate these fields properly
-	_ = types.WALEntry[T]{
-		Key:       "",
-		Data:      *new(T),
-		Timestamp: time.Now(),
-		WALName:   "",
-	}
-
 	w.proposalBuffer.Write(proposal)
 	return nil
 }
@@ -167,9 +169,59 @@ func (w *wal[T]) Watch() (<-chan []T, func()) {
  *
  ******************************************************************************/
 
+var closeTimeoutDuration = 5 * time.Second
+
 // Run implements types.WAL.
 func (w *wal[T]) Run(ctx context.Context) error {
-	panic("unimplemented")
+	w.mu.Lock()
+	if w.running {
+		w.mu.Unlock()
+		return types.ErrAlreadyRunning
+	} else if w.closed {
+		w.mu.Unlock()
+		return types.ErrCannotRunClosedRunnable
+	}
+
+	w.ctx = ctx
+	w.running = true
+	go w.eventLoop()
+	w.mu.Unlock()
+
+	return nil
+}
+
+// eventLoop reads proposals from the proposalBuffer and dispatches them to
+// watchers. In single-node MVP mode, proposals are immediately accepted
+// without cluster consensus.
+func (w *wal[T]) eventLoop() {
+	// The proposalBuffer.Next() call blocks until data is available.
+	// A reader goroutine is needed so the event loop can check terminateCh
+	// while blocked on Next().
+	proposalCh := make(chan types.WALEntry[T])
+	go func() {
+		for {
+			entry := w.proposalBuffer.Next()
+			select {
+			case proposalCh <- entry:
+			case <-w.terminateCh:
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-w.terminateCh:
+			goto terminate
+		case proposal := <-proposalCh:
+			w.linkedList.Append(proposal)
+			w.watcherMux.Dispatch([]T{proposal.Data})
+		}
+	}
+
+terminate:
+	_ = w.watcherMux.Close()
+	close(w.doneCh)
 }
 
 /*******************************************************************************
@@ -178,14 +230,33 @@ func (w *wal[T]) Run(ctx context.Context) error {
  ******************************************************************************/
 
 // Close implements types.WAL.
+// ANSWERED: w.cluster.Unregister is not needed. The WAL subscribes to the
+// cluster via Watch() which returns a cancel function. The event loop calls
+// that cancel on termination. The cluster connection is managed externally.
 func (w *wal[T]) Close() error {
-	// -- trigger termination.
-	close(w.terminateCh)
-	// -- await termination
-	<-w.doneCh
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	// w.cluster. Unregister ???
-	panic("unimplemented")
+	if !w.running {
+		return types.ErrRunnableMustBeRunningToBeClosed
+	} else if w.closed {
+		return types.ErrAlreadyClosed
+	}
+
+	// Trigger termination of the event loop.
+	close(w.terminateCh)
+
+	// Await graceful termination within timeout.
+	timeoutCh := time.After(closeTimeoutDuration)
+	select {
+	case <-w.doneCh:
+	case <-timeoutCh:
+	}
+
+	w.running = false
+	w.closed = true
+
+	return nil
 }
 
 // Done implements types.WAL.

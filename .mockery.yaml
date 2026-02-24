@@ -1,0 +1,9 @@
+packages:
+  github.com/alexandremahdhaoui/udplb/internal/types:
+    config:
+      dir: "internal/types/mocks"
+      pkgname: mocks
+      filename: "zz_generated_mocks.go"
+    interfaces:
+      Cluster:
+      WAL:

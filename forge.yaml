@@ -42,6 +42,12 @@ build:
             protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative "$proto"
           done
 
+  # Mock generation via mockery v3 -- reads .mockery.yaml
+  - name: generated-mocks
+    src: ./.mockery.yaml
+    dest: ./internal/types/mocks
+    engine: go://go-gen-mocks
+
   # eBPF compilation (standalone build step -- engine needs src/dest)
   - name: generate-bpf
     src: ./internal/adapter/bpf/udplb_kern.c

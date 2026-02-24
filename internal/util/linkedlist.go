@@ -91,6 +91,20 @@ func (l *LinkedList[T]) Append(data T) {
 		l.length -= 1
 	}
 
+	// Handle empty list case: tail is nil when the list has no elements.
+	if l.tail == nil {
+		node := &LLNode[T]{
+			previous: nil,
+			next:     nil,
+			data:     data,
+			mu:       &sync.Mutex{},
+		}
+		l.head = node
+		l.tail = node
+		l.length += 1
+		return
+	}
+
 	// -- BEGIN critical section
 	// This will not deadlock because *LLNode[T] does not implement methods
 	// that locks and block; and there are no other locking usage of l.tail

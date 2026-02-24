@@ -117,3 +117,111 @@ signalling pathways:
     - Agree on a consistent log of `Assignment`.
     - Periodically sync `Assignment` data kind b/w Nodes to ensure consistency and purge the log.
     - Sync `Assignment` to new or restarted UDPLB nodes.
+
+### Signal pathways per data kind
+
+Each data kind flows through one or more signal pathways. The table below
+lists the signal type, pathway, producer, and consumer for each data kind.
+
+| Data Kind | Signal Type | Pathway | Producer | Consumer |
+|---|---|---|---|---|
+| Assignment | Autocrine | LocalAssignment (eBPF ring buffer) | `bpf.DatastructureManager` | DVDS controller |
+| Assignment | Paracrine | RemoteAssignment (UDP) | `monitoradapter.RemoteAssignment` | DVDS controller |
+| Assignment | Endocrine | AssignmentMap (WAL + cluster consensus) | DVDS controller | DVDS controller |
+| BackendSpec | Config | BackendSpecList (file read at startup) | `monitoradapter.backendSpecList` | `bpf.DatastructureManager` |
+| BackendStatus | Paracrine | BackendStateMap (UDP health probe) | `monitoradapter.backendState` | DVDS controller |
+| RLT | Endocrine | ReverseLookupTable (WAL + cluster, gRPC/TCP) | DVDS controller | DVDS controller |
+
+**Assignment** uses 3 pathways. LocalAssignment detects new sessions inside
+the eBPF program and delivers them to userspace via a ring buffer.
+RemoteAssignment broadcasts assignments to peer nodes over UDP without
+consensus. AssignmentMap achieves cluster-wide consistency through WAL
+consensus.
+
+**BackendSpec** is read once from the configuration file at startup. No
+consensus is required.
+
+**BackendStatus** is produced by periodic UDP health probes against each
+backend. The DVDS controller consumes these status events to update the
+backend state machine.
+
+**RLT** (Reverse Lookup Table) propagates through WAL-based consensus over
+gRPC/TCP. Nodes agree on a consistent RLT state before applying changes.
+
+### Adapter-to-interface mapping
+
+Each adapter implements one or more `types` interfaces and handles a
+specific signal type. The table below maps each adapter to its interface
+and transport.
+
+| Adapter | Interface | Signal Type |
+|---|---|---|
+| `bpf.DatastructureManager` | `Watcher[Assignment]` | Autocrine (eBPF ring buffer) |
+| `monitoradapter.RemoteAssignment` | `Watcher[Assignment]` + `Runnable` | Paracrine (UDP) |
+| `monitoradapter.backendSpecList` | `Watcher[BackendSpecMap]` | Config (file read) |
+| `monitoradapter.backendState` | `Watcher[BackendStatusEntry]` + `Runnable` | Paracrine (UDP probe) |
+| `waladapter.wal[T]` | `WAL[T]` (`Runnable` + `Watcher[[]T]`) | Endocrine (cluster consensus) |
+| `clusteradpater.clusterMux` | `RawCluster` | Network transport (UDP) |
+| `clusteradpater.typedCluster[T]` | `Cluster[T]` | Generic typed transport |
+
+Adapters that implement `Runnable` start background goroutines via
+`Run(ctx)`. Adapters that implement only `Watcher[T]` provide a `Watch()`
+method without requiring `Run`.
+
+### Component lifecycle
+
+All `Runnable` components follow the `terminateCh`/`doneCh` pattern. This
+pattern originates from `bpf/manager.go` and applies to every adapter and
+controller with a background event loop.
+
+**Channels:**
+
+- `terminateCh` (`chan struct{}`): Signals the component to stop. Created
+  in the constructor. Closed by `Close()`.
+- `doneCh` (`chan struct{}`): Confirms the component has stopped. Created
+  in the constructor. Closed by the event loop after cleanup.
+
+**`Run(ctx)`:**
+
+1. Lock mutex.
+2. Guard: return `ErrAlreadyRunning` if running. Return
+   `ErrCannotRunClosedRunnable` if closed.
+3. Start event loop goroutine(s).
+4. Set `running = true`.
+5. Unlock mutex and return nil.
+
+**`Close()`:**
+
+1. Lock mutex (defer unlock).
+2. Guard: return `ErrRunnableMustBeRunningToBeClosed` if not running.
+   Return `ErrAlreadyClosed` if closed.
+3. `close(terminateCh)` -- triggers event loop shutdown.
+4. Await `doneCh` with a 5-second timeout.
+5. Set `running = false`, `closed = true`.
+
+**Event loop goroutine:**
+
+1. Select on `terminateCh` and data channels.
+2. On `terminateCh` closure: release resources (close listeners, cancel
+   watchers).
+3. Close `doneCh` as the last action before returning.
+
+```text
+   caller          component          goroutine(s)
+     |                 |                   |
+     |--- Run(ctx) --->|                   |
+     |                 |--- go eventLoop ->|
+     |<--- nil --------|                   |
+     |                 |                   |--- select { terminateCh, data }
+     |                 |                   |
+     |--- Close() ---->|                   |
+     |                 |-- close(terminateCh)
+     |                 |                   |--- cleanup resources
+     |                 |                   |--- close(doneCh)
+     |                 |<-- doneCh closed -|
+     |<--- nil --------|                   |
+```
+
+This pattern prevents double-run, run-after-close, double-close, and
+close-before-run. The 5-second timeout in `Close()` prevents indefinite
+hangs if the event loop fails to terminate.

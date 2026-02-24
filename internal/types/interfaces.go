@@ -121,7 +121,7 @@ type WAL[T any] interface {
 // It uses that table to find the right WAL interface and decode the RawData into
 // the Data field of a new WALEntry[T].
 type WALMux interface {
-	Register(walId uuid.UUID, v any) (Watcher[any], error)
+	Register(walName string, v any) (Watcher[any], error)
 }
 
 type RawCluster = Cluster[RawData]

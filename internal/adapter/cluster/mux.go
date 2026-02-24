@@ -17,6 +17,10 @@ package clusteradpater
 
 import (
 	"context"
+	"log/slog"
+	"net"
+	"sync"
+	"time"
 
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
@@ -25,9 +29,8 @@ import (
 
 var _ types.RawCluster = &clusterMux{}
 
-// Protocol is an abstraction over Send/Recv.
-// TODO: Define actual protocol interface (e.g. UDP or GRPC).
-type Protocol interface{}
+// IMPLEMENTED: Protocol is defined in protocol.go as an abstraction over
+// Send/Recv. UDP transport is implemented via NewUDPProtocol().
 
 /*******************************************************************************
  * Concrete implementation
@@ -35,8 +38,21 @@ type Protocol interface{}
  ******************************************************************************/
 
 type clusterMux struct {
-	recvWorkerPool *util.WorkerPool
-	sendWorkerPool *util.WorkerPool
+	ctx         context.Context
+	protocol    Protocol
+	topology    Topology
+	listener    Listener
+	listenAddr  string
+	nodeId      uuid.UUID
+	nodes       map[uuid.UUID]Node
+	conns       map[uuid.UUID]Conn
+	sendSources []<-chan []byte
+	recvMux     *util.WatcherMux[types.RawData]
+	mu          *sync.RWMutex
+	running     bool
+	closed      bool
+	doneCh      chan struct{}
+	terminateCh chan struct{}
 }
 
 /*******************************************************************************
@@ -79,32 +95,233 @@ type clusterMux struct {
 // at once?
 // What about multiplexing? Looks like it's a bit leaky.
 
+// NewMux creates a new clusterMux that implements types.RawCluster.
+// The mux uses the given protocol for network transport and topology
+// for determining send targets.
 func NewMux(
-	// TODO: Protocol will be an abstraction over Send/Recv.
-	// E.g. UDP or GRPC.
-	protocol Protocol,
+	nodeId uuid.UUID,
+	listenAddr string,
+	protocol Protocol, // IMPLEMENTED: abstraction over Send/Recv (e.g. UDP or GRPC).
 	topology Topology, // Leader based, Ring or Fully connected.
-	recvWorkerPool *util.WorkerPool,
-	sendWorkerPool *util.WorkerPool,
+	recvMux *util.WatcherMux[types.RawData],
 ) types.RawCluster {
 	return &clusterMux{
-		recvWorkerPool: recvWorkerPool,
-		sendWorkerPool: sendWorkerPool,
+		protocol:    protocol,
+		topology:    topology,
+		listenAddr:  listenAddr,
+		nodeId:      nodeId,
+		nodes:       make(map[uuid.UUID]Node),
+		conns:       make(map[uuid.UUID]Conn),
+		sendSources: nil,
+		recvMux:     recvMux,
+		mu:          &sync.RWMutex{},
+		running:     false,
+		closed:      false,
+		doneCh:      make(chan struct{}),
+		terminateCh: make(chan struct{}),
 	}
 }
 
 /*******************************************************************************
- * Recv
+ * Run
  *
  ******************************************************************************/
 
-// Recv implements types.Cluster.
-func (cm *clusterMux) Recv() (<-chan []byte, func()) {
-	// Q:
-	// - send to c.currentLeader().
-	// - or send to all available member.
-	// or not implemented here but in run?
-	panic("unimplemented")
+// Run implements types.Cluster.
+// It opens the listener, starts the recv and send loops, and returns.
+func (cm *clusterMux) Run(ctx context.Context) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.running {
+		return types.ErrAlreadyRunning
+	} else if cm.closed {
+		return types.ErrCannotRunClosedRunnable
+	}
+
+	listener, err := cm.protocol.Listen(cm.listenAddr)
+	if err != nil {
+		return err
+	}
+	cm.listener = listener
+	cm.ctx = ctx
+	cm.running = true
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go cm.recvLoop(&wg)
+	go cm.sendLoop(&wg)
+
+	// A separate goroutine waits for both loops to finish, then closes doneCh.
+	go func() {
+		wg.Wait()
+		close(cm.doneCh)
+	}()
+
+	return nil
+}
+
+/*******************************************************************************
+ * recvLoop
+ *
+ ******************************************************************************/
+
+var (
+	recvBufSize  = 65536
+	readDeadline = 100 * time.Millisecond
+)
+
+func (cm *clusterMux) recvLoop(wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	buf := make([]byte, recvBufSize)
+	for {
+		select {
+		case <-cm.terminateCh:
+			goto terminate
+		default:
+		}
+
+		if err := cm.listener.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
+			slog.ErrorContext(cm.ctx, "setting read deadline", "err", err.Error())
+			continue
+		}
+
+		n, _, err := cm.listener.ReadFrom(buf)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
+			}
+			// Check if we were asked to terminate (listener closed).
+			select {
+			case <-cm.terminateCh:
+				goto terminate
+			default:
+			}
+			slog.ErrorContext(cm.ctx, "reading from listener", "err", err.Error())
+			continue
+		}
+
+		// Copy the buffer before dispatching. The buf slice is reused
+		// each iteration; dispatching without copying would cause all
+		// watchers to see corrupted data.
+		dataCopy := make([]byte, n)
+		copy(dataCopy, buf[:n])
+
+		cm.recvMux.Dispatch(dataCopy)
+	}
+
+terminate:
+	_ = cm.listener.Close()
+	_ = cm.recvMux.Close()
+}
+
+/*******************************************************************************
+ * sendLoop
+ *
+ ******************************************************************************/
+
+func (cm *clusterMux) sendLoop(wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// Merge all sendSources into a single channel using one goroutine per source.
+	merged := make(chan []byte)
+	var mergeWg sync.WaitGroup
+
+	cm.mu.RLock()
+	sources := cm.sendSources
+	cm.mu.RUnlock()
+
+	for _, src := range sources {
+		mergeWg.Add(1)
+		go func(ch <-chan []byte) {
+			defer mergeWg.Done()
+			for {
+				select {
+				case <-cm.terminateCh:
+					return
+				case data, ok := <-ch:
+					if !ok {
+						return
+					}
+					select {
+					case merged <- data:
+					case <-cm.terminateCh:
+						return
+					}
+				}
+			}
+		}(src)
+	}
+
+	// Close merged channel when all source goroutines exit.
+	go func() {
+		mergeWg.Wait()
+		close(merged)
+	}()
+
+	for {
+		select {
+		case <-cm.terminateCh:
+			goto terminate
+		case data, ok := <-merged:
+			if !ok {
+				goto terminate
+			}
+			cm.mu.RLock()
+			peers, err := cm.topology.NextPeers(cm.nodeId, cm.nodes)
+			cm.mu.RUnlock()
+			if err != nil {
+				slog.ErrorContext(cm.ctx, "getting next peers", "err", err.Error())
+				continue
+			}
+
+			for _, peer := range peers {
+				conn, err := cm.getOrDialConn(peer)
+				if err != nil {
+					slog.ErrorContext(cm.ctx, "dialing peer",
+						"peerId", peer.ID.String(),
+						"err", err.Error())
+					continue
+				}
+				if _, err := conn.Write(data); err != nil {
+					slog.ErrorContext(cm.ctx, "writing to peer",
+						"peerId", peer.ID.String(),
+						"err", err.Error())
+				}
+			}
+		}
+	}
+
+terminate:
+	cm.mu.Lock()
+	for id, conn := range cm.conns {
+		_ = conn.Close()
+		delete(cm.conns, id)
+	}
+	cm.mu.Unlock()
+}
+
+// getOrDialConn returns an existing connection to the peer, or dials a new one.
+func (cm *clusterMux) getOrDialConn(peer Node) (Conn, error) {
+	cm.mu.RLock()
+	conn, ok := cm.conns[peer.ID]
+	cm.mu.RUnlock()
+	if ok {
+		return conn, nil
+	}
+
+	conn, err := cm.protocol.Dial(peer.Addr.String())
+	if err != nil {
+		return nil, err
+	}
+
+	cm.mu.Lock()
+	cm.conns[peer.ID] = conn
+	cm.mu.Unlock()
+
+	return conn, nil
 }
 
 /*******************************************************************************
@@ -113,12 +330,35 @@ func (cm *clusterMux) Recv() (<-chan []byte, func()) {
  ******************************************************************************/
 
 // Send implements types.Cluster.
+// Append ch to sendSources. Must be called before Run().
+//
+// IMPLEMENTED: Fan-in/merge of many channels is solved using one goroutine per
+// source feeding into a single merged channel (see sendLoop). This avoids
+// reflect.Select and the associated complexity.
 func (cm *clusterMux) Send(ch <-chan []byte) error {
-	// needs to fan-in/merge
-	// TODO: figure out how to select from many channels programmatically.
-	// e.g. using reflect.Select() || OR https://stackoverflow.com/a/32342741 ||
-	// OR Check code about merging channels.
-	panic("unimplemented")
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.running {
+		return types.ErrAlreadyRunning
+	}
+
+	cm.sendSources = append(cm.sendSources, ch)
+	return nil
+}
+
+/*******************************************************************************
+ * Recv
+ *
+ ******************************************************************************/
+
+// Recv implements types.Cluster.
+// ANSWERED: Recv delegates to recvMux.Watch(). Data flows from
+// recvLoop -> WatcherMux -> watchers. Neither currentLeader() nor
+// sending to all members is needed here; the recvLoop handles
+// incoming data from all peers and recvMux fans out to watchers.
+func (cm *clusterMux) Recv() (<-chan []byte, func()) {
+	return cm.recvMux.Watch(util.NoFilter)
 }
 
 /*******************************************************************************
@@ -127,8 +367,9 @@ func (cm *clusterMux) Send(ch <-chan []byte) error {
  ******************************************************************************/
 
 // Join implements types.Cluster.
+// For MVP: no-op that returns nil.
 func (cm *clusterMux) Join() error {
-	panic("unimplemented")
+	return nil
 }
 
 /*******************************************************************************
@@ -137,8 +378,9 @@ func (cm *clusterMux) Join() error {
  ******************************************************************************/
 
 // Leave implements types.Cluster.
+// For MVP: no-op that returns nil.
 func (cm *clusterMux) Leave() error {
-	panic("unimplemented")
+	return nil
 }
 
 /*******************************************************************************
@@ -148,30 +390,61 @@ func (cm *clusterMux) Leave() error {
 
 // ListNodes implements types.Cluster.
 func (cm *clusterMux) ListNodes() []uuid.UUID {
-	panic("unimplemented")
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	ids := make([]uuid.UUID, 0, len(cm.nodes))
+	for id := range cm.nodes {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 /*******************************************************************************
- * Runnable
+ * Close
  *
  ******************************************************************************/
 
-// Run implements types.Cluster.
-func (cm *clusterMux) Run(ctx context.Context) error {
-	panic("unimplemented")
-}
-
-/*******************************************************************************
- * DoneCloser
- *
- ******************************************************************************/
+var closeTimeoutDuration = 5 * time.Second
 
 // Close implements types.Cluster.
+// Follows the bpf/manager.go Close pattern.
 func (cm *clusterMux) Close() error {
-	panic("unimplemented")
+	cm.mu.Lock()
+
+	if cm.closed {
+		cm.mu.Unlock()
+		return types.ErrAlreadyClosed
+	} else if !cm.running {
+		cm.mu.Unlock()
+		return types.ErrRunnableMustBeRunningToBeClosed
+	}
+
+	close(cm.terminateCh)
+	cm.mu.Unlock()
+
+	// Wait for both loops to finish without holding the lock.
+	// The sendLoop acquires mu.Lock in its terminate block to close conns.
+	timeoutCh := time.After(closeTimeoutDuration)
+	select {
+	case <-cm.doneCh:
+	case <-timeoutCh:
+	}
+
+	cm.mu.Lock()
+	cm.running = false
+	cm.closed = true
+	cm.mu.Unlock()
+
+	return nil
 }
+
+/*******************************************************************************
+ * Done
+ *
+ ******************************************************************************/
 
 // Done implements types.Cluster.
 func (cm *clusterMux) Done() <-chan struct{} {
-	panic("unimplemented")
+	return cm.doneCh
 }
