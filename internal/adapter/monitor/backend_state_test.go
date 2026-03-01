@@ -105,6 +105,18 @@ func TestBackendState_HealthCheckDispatch(t *testing.T) {
 	require.NoError(t, err)
 	defer pc.Close()
 
+	// Echo goroutine: read and echo back all packets.
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return // listener closed
+			}
+			_, _ = pc.WriteTo(buf[:n], addr)
+		}
+	}()
+
 	addr := pc.LocalAddr().(*net.UDPAddr)
 
 	backendID := uuid.New()
@@ -138,7 +150,7 @@ func TestBackendState_HealthCheckDispatch(t *testing.T) {
 	select {
 	case entry := <-ch:
 		assert.Equal(t, backendID, entry.BackendId)
-		// UDP dial-only probe reports StateAvailable for reachable addresses.
+		// UDP echo probe reports StateAvailable when the backend echoes back.
 		assert.Equal(t, types.StateAvailable, entry.State)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for health check dispatch")
@@ -154,6 +166,28 @@ func TestBackendState_MultipleBackendsDispatched(t *testing.T) {
 	pc2, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer pc2.Close()
+
+	// Echo goroutines: read and echo back all packets.
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, addr, err := pc1.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = pc1.WriteTo(buf[:n], addr)
+		}
+	}()
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, addr, err := pc2.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = pc2.WriteTo(buf[:n], addr)
+		}
+	}()
 
 	addr1 := pc1.LocalAddr().(*net.UDPAddr)
 	addr2 := pc2.LocalAddr().(*net.UDPAddr)
@@ -198,4 +232,43 @@ func TestBackendState_MultipleBackendsDispatched(t *testing.T) {
 
 	assert.True(t, seen[id1], "expected backend 1 to be probed")
 	assert.True(t, seen[id2], "expected backend 2 to be probed")
+}
+
+func TestBackendState_ProbeTimeout(t *testing.T) {
+	// Use a port with no listener -- the probe should time out.
+	backendID := uuid.New()
+	backends := map[uuid.UUID]types.BackendSpec{
+		backendID: {
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: 1, // port 1 has no listener; probe will time out
+		},
+	}
+
+	watcherMux := util.NewWatcherMux[types.BackendStatusEntry](
+		util.WatcherMuxRecommendedBufferSize,
+		util.NonBlockingDispatchFunc[types.BackendStatusEntry],
+	)
+
+	bs := monitoradapter.NewBackendState(
+		backends,
+		100*time.Millisecond, // interval: probe every 100ms
+		200*time.Millisecond, // timeout: 200ms
+		watcherMux,
+	)
+
+	ch, cancel := bs.Watch()
+	defer cancel()
+
+	err := bs.Run(context.Background())
+	require.NoError(t, err)
+	defer func() { _ = bs.Close() }()
+
+	select {
+	case entry := <-ch:
+		assert.Equal(t, backendID, entry.BackendId)
+		assert.Equal(t, types.StateUnavailable, entry.State,
+			"backend with no listener should be StateUnavailable")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for health check dispatch")
+	}
 }

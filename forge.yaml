@@ -83,10 +83,32 @@ build:
       env:
         CGO_ENABLED: "0"
 
+  # E2E support binaries
+  - name: udplb-traffic-gen
+    src: ./cmd/udplb-traffic-gen
+    dest: ./build/bin
+    engine: go://go-build
+    spec:
+      env:
+        CGO_ENABLED: "0"
+        GOOS: "linux"
+        GOARCH: "amd64"
+
+  - name: udplb-echo-backend
+    src: ./cmd/udplb-echo-backend
+    dest: ./build/bin
+    engine: go://go-build
+    spec:
+      env:
+        CGO_ENABLED: "0"
+        GOOS: "linux"
+        GOARCH: "amd64"
+
 # ----------------------------------------------------------------------
 # -- engines defines reusable build engines with custom configurations
 engines:
   # E2E test environment using testenv-vm with libvirt
+  # 8-VM topology: router + client + 3 LBs + 3 backends on flat L2 (10.100.0.0/24)
   - alias: e2e-testenv
     type: testenv
     testenv:
@@ -107,6 +129,9 @@ engines:
                   packages:
                     - socat
                     - curl
+                    - frr
+                    - iproute2
+                    - tcpdump
           providers:
             - name: libvirt
               engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt@v0.14.0
@@ -124,14 +149,14 @@ engines:
               kind: nat
               provider: libvirt
               spec:
-                cidr: "192.168.200.0/24"
+                cidr: "10.100.0.0/24"
                 # Disable libvirt DHCP - use static IPs via cloud-init networkConfig
                 dhcp:
                   enabled: false
 
           vms:
-            # vm0-lb: Load balancer instance 0
-            - name: vm0-lb
+            # router: FRR BGP router, AS 65000, peers with all 3 LBs
+            - name: router
               provider: libvirt
               spec:
                 memory: 512
@@ -141,14 +166,13 @@ engines:
                   baseImage: "{{ .Images.udplb-base.Path }}"
                   size: 4G
                 cloudInit:
-                  hostname: vm0-lb
-                  # Static network config - applied before any cloud-init modules run
+                  hostname: router
                   networkConfig:
                     ethernets:
-                      - name: ens2
+                      - name: "en*"
                         addresses:
-                          - "192.168.200.10/24"
-                        gateway4: "192.168.200.1"
+                          - "10.100.0.2/24"
+                        gateway4: "10.100.0.1"
                         nameservers:
                           addresses:
                             - "8.8.8.8"
@@ -157,18 +181,47 @@ engines:
                       sudo: "ALL=(ALL) NOPASSWD:ALL"
                       sshAuthorizedKeys:
                         - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    - "sysctl -w net.ipv4.ip_forward=1"
+                    - "sysctl -w net.ipv4.conf.all.rp_filter=0"
+                    - "sysctl -w net.ipv4.conf.default.rp_filter=0"
+                    # send_redirects uses OR(all, interface) — must disable on every interface
+                    - "for f in /proc/sys/net/ipv4/conf/*/send_redirects; do echo 0 > \"$f\"; done"
+                    - "nft flush ruleset || true"
+                    - "iptables -P FORWARD ACCEPT || true"
+                    - "iptables -F FORWARD || true"
+                    - "ufw disable || true"
+                    - "sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons"
+                    - "sed -i 's/^zebra=no/zebra=yes/' /etc/frr/daemons"
+                    - |
+                      cat > /etc/frr/frr.conf << 'FRREOF'
+                      frr defaults traditional
+                      hostname router
+                      router bgp 65000
+                       no bgp ebgp-requires-policy
+                       bgp router-id 10.100.0.2
+                       neighbor 10.100.0.10 remote-as 65001
+                       neighbor 10.100.0.11 remote-as 65001
+                       neighbor 10.100.0.12 remote-as 65001
+                       address-family ipv4 unicast
+                        maximum-paths 3
+                       exit-address-family
+                      FRREOF
+                    - "chown frr:frr /etc/frr/frr.conf"
+                    - "chmod 0640 /etc/frr/frr.conf"
+                    - "systemctl restart frr"
                 boot:
                   order: [hd]
                   firmware: bios
                 readiness:
                   ssh:
                     enabled: true
-                    timeout: "2m"
+                    timeout: "90s"
                     user: ubuntu
                     privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
 
-            # vm1-lb: Load balancer instance 1
-            - name: vm1-lb
+            # client: traffic generator, routes VIP via router
+            - name: client
               provider: libvirt
               spec:
                 memory: 512
@@ -178,14 +231,13 @@ engines:
                   baseImage: "{{ .Images.udplb-base.Path }}"
                   size: 4G
                 cloudInit:
-                  hostname: vm1-lb
-                  # Static network config - applied before any cloud-init modules run
+                  hostname: client
                   networkConfig:
                     ethernets:
-                      - name: ens2
+                      - name: "en*"
                         addresses:
-                          - "192.168.200.11/24"
-                        gateway4: "192.168.200.1"
+                          - "10.100.0.100/24"
+                        gateway4: "10.100.0.1"
                         nameservers:
                           addresses:
                             - "8.8.8.8"
@@ -194,18 +246,193 @@ engines:
                       sudo: "ALL=(ALL) NOPASSWD:ALL"
                       sshAuthorizedKeys:
                         - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    # accept_redirects uses OR(all, interface) — must disable on every interface
+                    - "for f in /proc/sys/net/ipv4/conf/*/accept_redirects; do echo 0 > \"$f\"; done"
+                    - "ip route add 10.100.0.200/32 via 10.100.0.2"
                 boot:
                   order: [hd]
                   firmware: bios
                 readiness:
                   ssh:
                     enabled: true
-                    timeout: "2m"
+                    timeout: "90s"
                     user: ubuntu
                     privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
 
-            # vm2-lb: Load balancer instance 2
-            - name: vm2-lb
+            # lb-0: Load balancer 0, AS 65001, announces VIP via BGP
+            - name: lb-0
+              provider: libvirt
+              spec:
+                memory: 1024
+                vcpus: 2
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.udplb-base.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: lb-0
+                  networkConfig:
+                    ethernets:
+                      - name: "en*"
+                        addresses:
+                          - "10.100.0.10/24"
+                        gateway4: "10.100.0.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    - "sysctl -w net.ipv4.conf.all.arp_ignore=1"
+                    - "sysctl -w net.ipv4.conf.all.arp_announce=2"
+                    - "ip addr add 10.100.0.200/32 dev lo"
+                    - "sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons"
+                    - "sed -i 's/^zebra=no/zebra=yes/' /etc/frr/daemons"
+                    - |
+                      cat > /etc/frr/frr.conf << 'FRREOF'
+                      frr defaults traditional
+                      hostname lb-0
+                      router bgp 65001
+                       no bgp ebgp-requires-policy
+                       bgp router-id 10.100.0.10
+                       neighbor 10.100.0.2 remote-as 65000
+                       address-family ipv4 unicast
+                        network 10.100.0.200/32
+                       exit-address-family
+                      FRREOF
+                    - "chown frr:frr /etc/frr/frr.conf"
+                    - "chmod 0640 /etc/frr/frr.conf"
+                    - "systemctl restart frr"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "90s"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
+
+            # lb-1: Load balancer 1, AS 65001, announces VIP via BGP
+            - name: lb-1
+              provider: libvirt
+              spec:
+                memory: 1024
+                vcpus: 2
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.udplb-base.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: lb-1
+                  networkConfig:
+                    ethernets:
+                      - name: "en*"
+                        addresses:
+                          - "10.100.0.11/24"
+                        gateway4: "10.100.0.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    - "sysctl -w net.ipv4.conf.all.arp_ignore=1"
+                    - "sysctl -w net.ipv4.conf.all.arp_announce=2"
+                    - "ip addr add 10.100.0.200/32 dev lo"
+                    - "sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons"
+                    - "sed -i 's/^zebra=no/zebra=yes/' /etc/frr/daemons"
+                    - |
+                      cat > /etc/frr/frr.conf << 'FRREOF'
+                      frr defaults traditional
+                      hostname lb-1
+                      router bgp 65001
+                       no bgp ebgp-requires-policy
+                       bgp router-id 10.100.0.11
+                       neighbor 10.100.0.2 remote-as 65000
+                       address-family ipv4 unicast
+                        network 10.100.0.200/32
+                       exit-address-family
+                      FRREOF
+                    - "chown frr:frr /etc/frr/frr.conf"
+                    - "chmod 0640 /etc/frr/frr.conf"
+                    - "systemctl restart frr"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "90s"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
+
+            # lb-2: Load balancer 2, AS 65001, announces VIP via BGP
+            - name: lb-2
+              provider: libvirt
+              spec:
+                memory: 1024
+                vcpus: 2
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.udplb-base.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: lb-2
+                  networkConfig:
+                    ethernets:
+                      - name: "en*"
+                        addresses:
+                          - "10.100.0.12/24"
+                        gateway4: "10.100.0.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    - "sysctl -w net.ipv4.conf.all.arp_ignore=1"
+                    - "sysctl -w net.ipv4.conf.all.arp_announce=2"
+                    - "ip addr add 10.100.0.200/32 dev lo"
+                    - "sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons"
+                    - "sed -i 's/^zebra=no/zebra=yes/' /etc/frr/daemons"
+                    - |
+                      cat > /etc/frr/frr.conf << 'FRREOF'
+                      frr defaults traditional
+                      hostname lb-2
+                      router bgp 65001
+                       no bgp ebgp-requires-policy
+                       bgp router-id 10.100.0.12
+                       neighbor 10.100.0.2 remote-as 65000
+                       address-family ipv4 unicast
+                        network 10.100.0.200/32
+                       exit-address-family
+                      FRREOF
+                    - "chown frr:frr /etc/frr/frr.conf"
+                    - "chmod 0640 /etc/frr/frr.conf"
+                    - "systemctl restart frr"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "90s"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
+
+            # be-0: Echo backend 0
+            - name: be-0
               provider: libvirt
               spec:
                 memory: 512
@@ -215,14 +442,13 @@ engines:
                   baseImage: "{{ .Images.udplb-base.Path }}"
                   size: 4G
                 cloudInit:
-                  hostname: vm2-lb
-                  # Static network config - applied before any cloud-init modules run
+                  hostname: be-0
                   networkConfig:
                     ethernets:
-                      - name: ens2
+                      - name: "en*"
                         addresses:
-                          - "192.168.200.12/24"
-                        gateway4: "192.168.200.1"
+                          - "10.100.0.20/24"
+                        gateway4: "10.100.0.1"
                         nameservers:
                           addresses:
                             - "8.8.8.8"
@@ -231,12 +457,99 @@ engines:
                       sudo: "ALL=(ALL) NOPASSWD:ALL"
                       sshAuthorizedKeys:
                         - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    - "nft flush ruleset || true"
+                    - "iptables -P INPUT ACCEPT || true"
+                    - "iptables -F INPUT || true"
+                    - "ufw disable || true"
                 boot:
                   order: [hd]
                   firmware: bios
                 readiness:
                   ssh:
                     enabled: true
-                    timeout: "2m"
+                    timeout: "90s"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
+
+            # be-1: Echo backend 1
+            - name: be-1
+              provider: libvirt
+              spec:
+                memory: 512
+                vcpus: 1
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.udplb-base.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: be-1
+                  networkConfig:
+                    ethernets:
+                      - name: "en*"
+                        addresses:
+                          - "10.100.0.21/24"
+                        gateway4: "10.100.0.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    - "nft flush ruleset || true"
+                    - "iptables -P INPUT ACCEPT || true"
+                    - "iptables -F INPUT || true"
+                    - "ufw disable || true"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "90s"
+                    user: ubuntu
+                    privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"
+
+            # be-2: Echo backend 2
+            - name: be-2
+              provider: libvirt
+              spec:
+                memory: 512
+                vcpus: 1
+                network: UdplbNet
+                disk:
+                  baseImage: "{{ .Images.udplb-base.Path }}"
+                  size: 4G
+                cloudInit:
+                  hostname: be-2
+                  networkConfig:
+                    ethernets:
+                      - name: "en*"
+                        addresses:
+                          - "10.100.0.22/24"
+                        gateway4: "10.100.0.1"
+                        nameservers:
+                          addresses:
+                            - "8.8.8.8"
+                  users:
+                    - name: ubuntu
+                      sudo: "ALL=(ALL) NOPASSWD:ALL"
+                      sshAuthorizedKeys:
+                        - "{{ .Keys.VmSsh.PublicKey }}"
+                  runcmd:
+                    - "nft flush ruleset || true"
+                    - "iptables -P INPUT ACCEPT || true"
+                    - "iptables -F INPUT || true"
+                    - "ufw disable || true"
+                boot:
+                  order: [hd]
+                  firmware: bios
+                readiness:
+                  ssh:
+                    enabled: true
+                    timeout: "90s"
                     user: ubuntu
                     privateKey: "{{ .Keys.VmSsh.PrivateKeyPath }}"

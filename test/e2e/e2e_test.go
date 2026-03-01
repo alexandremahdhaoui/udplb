@@ -40,6 +40,7 @@ func runSSHCommand(ctx context.Context, sshKeyPath, user, host, command string) 
 		"-i", sshKeyPath,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 		"-o", "ConnectTimeout=10",
 		fmt.Sprintf("%s@%s", user, host),
 		command,
@@ -60,6 +61,7 @@ func copyFileToVM(ctx context.Context, sshKeyPath, user, host, localPath, remote
 		"-i", sshKeyPath,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 		"-o", "ConnectTimeout=10",
 		localPath,
 		fmt.Sprintf("%s@%s:%s", user, host, remotePath),
@@ -74,14 +76,13 @@ func copyFileToVM(ctx context.Context, sshKeyPath, user, host, localPath, remote
 	return nil
 }
 
-// findUdplbBinary finds the udplb binary in the build directory.
-func findUdplbBinary() (string, error) {
-	// Try common locations
+// findBinary finds a binary in the build directory by name.
+func findBinary(name string) (string, error) {
 	locations := []string{
-		"./build/bin/udplb",
-		"./udplb",
-		"../../build/bin/udplb",
-		"../../udplb",
+		"./build/bin/" + name,
+		"./" + name,
+		"../../build/bin/" + name,
+		"../../" + name,
 	}
 
 	for _, loc := range locations {
@@ -94,19 +95,24 @@ func findUdplbBinary() (string, error) {
 		}
 	}
 
-	return "", errors.New("udplb binary not found - run 'forge build udplb' first")
+	return "", errors.New(name + " binary not found - run 'forge build " + name + "' first")
 }
 
-// TestUDPLBE2E_VMsReachable tests that all VMs are reachable via SSH.
+// TestUDPLBE2E_VMsReachable tests that all 8 VMs are reachable via SSH.
 func TestUDPLBE2E_VMsReachable(t *testing.T) {
 	cfg, err := e2eutil.LoadTestenvConfig()
 	require.NoError(t, err, "testenv configuration must be available - run with 'forge test run e2e'")
 
 	t.Logf("Using testenv configuration:")
-	t.Logf("  VM0 IP: %s", cfg.VM0IP)
-	t.Logf("  VM1 IP: %s", cfg.VM1IP)
-	t.Logf("  VM2 IP: %s", cfg.VM2IP)
-	t.Logf("  SSH Key: %s", cfg.SSHKeyPath)
+	t.Logf("  Router IP: %s", cfg.RouterIP)
+	t.Logf("  Client IP: %s", cfg.ClientIP)
+	t.Logf("  LB-0 IP:   %s", cfg.LB0IP)
+	t.Logf("  LB-1 IP:   %s", cfg.LB1IP)
+	t.Logf("  LB-2 IP:   %s", cfg.LB2IP)
+	t.Logf("  BE-0 IP:   %s", cfg.BE0IP)
+	t.Logf("  BE-1 IP:   %s", cfg.BE1IP)
+	t.Logf("  BE-2 IP:   %s", cfg.BE2IP)
+	t.Logf("  SSH Key:   %s", cfg.SSHKeyPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -115,9 +121,14 @@ func TestUDPLBE2E_VMsReachable(t *testing.T) {
 		name string
 		ip   string
 	}{
-		{"vm0-lb", cfg.VM0IP},
-		{"vm1-lb", cfg.VM1IP},
-		{"vm2-lb", cfg.VM2IP},
+		{"router", cfg.RouterIP},
+		{"client", cfg.ClientIP},
+		{"lb-0", cfg.LB0IP},
+		{"lb-1", cfg.LB1IP},
+		{"lb-2", cfg.LB2IP},
+		{"be-0", cfg.BE0IP},
+		{"be-1", cfg.BE1IP},
+		{"be-2", cfg.BE2IP},
 	}
 
 	for _, vm := range vms {
@@ -129,41 +140,67 @@ func TestUDPLBE2E_VMsReachable(t *testing.T) {
 	}
 }
 
-// TestUDPLBE2E_CopyBinary tests copying the udplb binary to VMs.
+// TestUDPLBE2E_CopyBinary tests copying the udplb and support binaries to VMs.
 func TestUDPLBE2E_CopyBinary(t *testing.T) {
 	cfg, err := e2eutil.LoadTestenvConfig()
 	require.NoError(t, err, "testenv configuration must be available - run with 'forge test run e2e'")
 
-	binaryPath, err := findUdplbBinary()
-	require.NoError(t, err, "udplb binary must exist")
-	t.Logf("Found udplb binary at: %s", binaryPath)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	vms := []struct {
+	// Copy udplb binary to all LB VMs.
+	udplbPath, err := findBinary("udplb")
+	require.NoError(t, err, "udplb binary must exist")
+	t.Logf("Found udplb binary at: %s", udplbPath)
+
+	lbVMs := []struct {
 		name string
 		ip   string
 	}{
-		{"vm0-lb", cfg.VM0IP},
-		{"vm1-lb", cfg.VM1IP},
-		{"vm2-lb", cfg.VM2IP},
+		{"lb-0", cfg.LB0IP},
+		{"lb-1", cfg.LB1IP},
+		{"lb-2", cfg.LB2IP},
 	}
 
-	for _, vm := range vms {
-		t.Run(vm.name, func(t *testing.T) {
-			// Copy the binary
-			err := copyFileToVM(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, binaryPath, "/tmp/udplb")
+	for _, vm := range lbVMs {
+		t.Run("udplb/"+vm.name, func(t *testing.T) {
+			err := copyFileToVM(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, udplbPath, "/tmp/udplb")
 			require.NoError(t, err, "failed to copy udplb binary to %s", vm.name)
 
-			// Make it executable
 			_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, "chmod +x /tmp/udplb")
 			require.NoError(t, err, "failed to make udplb executable on %s", vm.name)
 
-			// Verify it's there
 			output, err := runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, "ls -la /tmp/udplb")
 			require.NoError(t, err, "failed to verify udplb on %s", vm.name)
 			t.Logf("udplb binary on %s: %s", vm.name, strings.TrimSpace(output))
+		})
+	}
+
+	// Copy echo-backend binary to all backend VMs.
+	echoPath, err := findBinary("udplb-echo-backend")
+	require.NoError(t, err, "udplb-echo-backend binary must exist")
+	t.Logf("Found udplb-echo-backend binary at: %s", echoPath)
+
+	beVMs := []struct {
+		name string
+		ip   string
+	}{
+		{"be-0", cfg.BE0IP},
+		{"be-1", cfg.BE1IP},
+		{"be-2", cfg.BE2IP},
+	}
+
+	for _, vm := range beVMs {
+		t.Run("echo-backend/"+vm.name, func(t *testing.T) {
+			err := copyFileToVM(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, echoPath, "/tmp/udplb-echo-backend")
+			require.NoError(t, err, "failed to copy udplb-echo-backend binary to %s", vm.name)
+
+			_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, "chmod +x /tmp/udplb-echo-backend")
+			require.NoError(t, err, "failed to make udplb-echo-backend executable on %s", vm.name)
+
+			output, err := runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, "ls -la /tmp/udplb-echo-backend")
+			require.NoError(t, err, "failed to verify udplb-echo-backend on %s", vm.name)
+			t.Logf("udplb-echo-backend binary on %s: %s", vm.name, strings.TrimSpace(output))
 		})
 	}
 }
@@ -176,41 +213,41 @@ func TestUDPLBE2E_UDPConnectivity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Cleanup any leftover socat processes from previous test runs
-	_, _ = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.VM1IP, "pkill socat; rm -f /tmp/udp_received.txt")
+	// Cleanup any leftover socat processes from previous test runs on be-0.
+	_, _ = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.BE0IP, "pkill socat; rm -f /tmp/udp_received.txt")
 	time.Sleep(1 * time.Second)
 
-	// Start a simple UDP listener on vm1-lb using socat
-	t.Log("Starting UDP listener on vm1-lb...")
+	// Start a UDP listener on be-0 using socat.
+	t.Log("Starting UDP listener on be-0...")
 	listenerCmd := fmt.Sprintf("nohup socat -u UDP4-LISTEN:%d,reuseaddr,fork OPEN:/tmp/udp_received.txt,creat,append > /dev/null 2>&1 &", e2eutil.UDPTestPort)
-	_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.VM1IP, listenerCmd)
-	require.NoError(t, err, "failed to start UDP listener on vm1-lb")
+	_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.BE0IP, listenerCmd)
+	require.NoError(t, err, "failed to start UDP listener on be-0")
 
-	// Give the listener time to start
+	// Give the listener time to start.
 	time.Sleep(2 * time.Second)
 
-	// Send a UDP packet from vm0-lb to vm1-lb
-	t.Log("Sending UDP packet from vm0-lb to vm1-lb...")
-	sendCmd := fmt.Sprintf("echo 'hello from vm0' | socat -u - UDP4-SENDTO:%s:%d", cfg.VM1IP, e2eutil.UDPTestPort)
-	_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.VM0IP, sendCmd)
-	require.NoError(t, err, "failed to send UDP packet from vm0-lb")
+	// Send a UDP packet from lb-0 to be-0.
+	t.Log("Sending UDP packet from lb-0 to be-0...")
+	sendCmd := fmt.Sprintf("echo 'hello from lb-0' | socat -u - UDP4-SENDTO:%s:%d", cfg.BE0IP, e2eutil.UDPTestPort)
+	_, err = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.LB0IP, sendCmd)
+	require.NoError(t, err, "failed to send UDP packet from lb-0")
 
-	// Give time for packet to arrive
+	// Give time for packet to arrive.
 	time.Sleep(2 * time.Second)
 
-	// Check if packet was received
-	t.Log("Checking if packet was received on vm1-lb...")
-	output, err := runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.VM1IP, "cat /tmp/udp_received.txt")
-	require.NoError(t, err, "failed to check received packets on vm1-lb")
-	require.Contains(t, output, "hello from vm0", "UDP packet should have been received")
+	// Check if packet was received.
+	t.Log("Checking if packet was received on be-0...")
+	output, err := runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.BE0IP, "cat /tmp/udp_received.txt")
+	require.NoError(t, err, "failed to check received packets on be-0")
+	require.Contains(t, output, "hello from lb-0", "UDP packet should have been received")
 
 	t.Log("UDP connectivity verified between VMs")
 
-	// Cleanup
-	_, _ = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.VM1IP, "pkill socat; rm -f /tmp/udp_received.txt")
+	// Cleanup.
+	_, _ = runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", cfg.BE0IP, "pkill socat; rm -f /tmp/udp_received.txt")
 }
 
-// TestUDPLBE2E_NetworkInterfaces verifies network interfaces on VMs.
+// TestUDPLBE2E_NetworkInterfaces verifies network interfaces on all 8 VMs.
 func TestUDPLBE2E_NetworkInterfaces(t *testing.T) {
 	cfg, err := e2eutil.LoadTestenvConfig()
 	require.NoError(t, err, "testenv configuration must be available - run with 'forge test run e2e'")
@@ -222,18 +259,22 @@ func TestUDPLBE2E_NetworkInterfaces(t *testing.T) {
 		name string
 		ip   string
 	}{
-		{"vm0-lb", cfg.VM0IP},
-		{"vm1-lb", cfg.VM1IP},
-		{"vm2-lb", cfg.VM2IP},
+		{"router", cfg.RouterIP},
+		{"client", cfg.ClientIP},
+		{"lb-0", cfg.LB0IP},
+		{"lb-1", cfg.LB1IP},
+		{"lb-2", cfg.LB2IP},
+		{"be-0", cfg.BE0IP},
+		{"be-1", cfg.BE1IP},
+		{"be-2", cfg.BE2IP},
 	}
 
 	for _, vm := range vms {
 		t.Run(vm.name, func(t *testing.T) {
-			// Check network interfaces - Alpine may use eth0 or enp*
 			output, err := runSSHCommand(ctx, cfg.SSHKeyPath, "ubuntu", vm.ip, "ip addr")
 			require.NoError(t, err, "failed to get network interfaces on %s", vm.name)
 			t.Logf("Network interfaces on %s:\n%s", vm.name, output)
-			// Verify the VM has the expected IP on some interface
+			// Verify the VM has the expected IP on some interface.
 			require.Contains(t, output, vm.ip, "VM should have its assigned IP address")
 		})
 	}

@@ -161,9 +161,6 @@ func TestBackendCoordinates(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetConfig(t *testing.T) {
-	// GetConfig reads os.Args[1] when filepath != "-", so we must set os.Args
-	// accordingly for file-based tests.
-
 	t.Run("reads valid YAML config from file", func(t *testing.T) {
 		yamlContent := `ifname: eth0
 ip: 10.0.0.1
@@ -186,11 +183,6 @@ backends:
 		require.NoError(t, err)
 		require.NoError(t, tmpFile.Close())
 
-		// GetConfig reads os.Args[1] for the file path (not the filepath param).
-		origArgs := os.Args
-		defer func() { os.Args = origArgs }()
-		os.Args = []string{"test-binary", tmpFile.Name()}
-
 		cfg, err := GetConfig(tmpFile.Name())
 		require.NoError(t, err)
 
@@ -211,10 +203,6 @@ backends:
 	})
 
 	t.Run("returns error for nonexistent file", func(t *testing.T) {
-		origArgs := os.Args
-		defer func() { os.Args = origArgs }()
-		os.Args = []string{"test-binary", "/nonexistent/path/config.yaml"}
-
 		_, err := GetConfig("/nonexistent/path/config.yaml")
 		assert.Error(t, err)
 	})
@@ -228,10 +216,6 @@ backends:
 		require.NoError(t, err)
 		require.NoError(t, tmpFile.Close())
 
-		origArgs := os.Args
-		defer func() { os.Args = origArgs }()
-		os.Args = []string{"test-binary", tmpFile.Name()}
-
 		_, err = GetConfig(tmpFile.Name())
 		assert.Error(t, err)
 	})
@@ -241,10 +225,6 @@ backends:
 		require.NoError(t, err)
 		defer os.Remove(tmpFile.Name())
 		require.NoError(t, tmpFile.Close())
-
-		origArgs := os.Args
-		defer func() { os.Args = origArgs }()
-		os.Args = []string{"test-binary", tmpFile.Name()}
 
 		cfg, err := GetConfig(tmpFile.Name())
 		require.NoError(t, err)
@@ -315,10 +295,6 @@ port: 3000
 		_, err = tmpFile.WriteString(yamlContent)
 		require.NoError(t, err)
 		require.NoError(t, tmpFile.Close())
-
-		origArgs := os.Args
-		defer func() { os.Args = origArgs }()
-		os.Args = []string{"test-binary", tmpFile.Name()}
 
 		cfg, err := GetConfig(tmpFile.Name())
 		require.NoError(t, err)

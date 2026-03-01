@@ -33,25 +33,60 @@ var ErrEnvVarNotSet = errors.New("testenv environment variable not set")
 var ErrStateFileNotFound = errors.New("testenv-vm state file not found")
 
 // Default static IPs assigned via cloud-init networkConfig in forge.yaml.
+// 8-VM topology: router + client + 3 LBs + 3 backends on flat L2 (10.100.0.0/24).
 const (
-	defaultVM0IP    = "192.168.200.10"
-	defaultVM1IP    = "192.168.200.11"
-	defaultVM2IP    = "192.168.200.12"
-	defaultBridgeIP = "192.168.200.1"
+	defaultRouterIP = "10.100.0.2"
+	defaultClientIP = "10.100.0.100"
+	defaultLB0IP    = "10.100.0.10"
+	defaultLB1IP    = "10.100.0.11"
+	defaultLB2IP    = "10.100.0.12"
+	defaultBE0IP    = "10.100.0.20"
+	defaultBE1IP    = "10.100.0.21"
+	defaultBE2IP    = "10.100.0.22"
+	defaultBridgeIP = "10.100.0.1"
+
+	// defaultVIPSuffix is the last octet of the VIP address within the subnet.
+	defaultVIPSuffix = "200"
+	// VIPPort is the UDP port for the VIP service.
+	VIPPort = 12345
+	// BackendPort is the UDP port for echo backends.
+	BackendPort = 8080
 )
 
 // TestenvConfig holds configuration from testenv-vm environment variables.
+// Maps to the 8-VM topology defined in forge.yaml engines section.
 type TestenvConfig struct {
-	// VM0IP is the IP of vm0-lb. Env: TESTENV_VM_VM0_LB_IP, fallback "192.168.200.10".
-	VM0IP string
-	// VM1IP is the IP of vm1-lb. Env: TESTENV_VM_VM1_LB_IP, fallback "192.168.200.11".
-	VM1IP string
-	// VM2IP is the IP of vm2-lb. Env: TESTENV_VM_VM2_LB_IP, fallback "192.168.200.12".
-	VM2IP string
+	// RouterIP is the IP of the FRR BGP router. Env: TESTENV_VM_ROUTER_IP, fallback "10.100.0.2".
+	RouterIP string
+	// ClientIP is the IP of the traffic generator client. Env: TESTENV_VM_CLIENT_IP, fallback "10.100.0.100".
+	ClientIP string
+	// LB0IP is the IP of lb-0. Env: TESTENV_VM_LB_0_IP, fallback "10.100.0.10".
+	LB0IP string
+	// LB1IP is the IP of lb-1. Env: TESTENV_VM_LB_1_IP, fallback "10.100.0.11".
+	LB1IP string
+	// LB2IP is the IP of lb-2. Env: TESTENV_VM_LB_2_IP, fallback "10.100.0.12".
+	LB2IP string
+	// BE0IP is the IP of be-0. Env: TESTENV_VM_BE_0_IP, fallback "10.100.0.20".
+	BE0IP string
+	// BE1IP is the IP of be-1. Env: TESTENV_VM_BE_1_IP, fallback "10.100.0.21".
+	BE1IP string
+	// BE2IP is the IP of be-2. Env: TESTENV_VM_BE_2_IP, fallback "10.100.0.22".
+	BE2IP string
 	// SSHKeyPath is the path to the SSH private key. Env: TESTENV_KEY_VMSSH_PRIVATE_PATH.
 	SSHKeyPath string
-	// BridgeIP is the IP of the bridge network. Env: TESTENV_NETWORK_UDPLBNET_IP, fallback "192.168.200.1".
+	// BridgeIP is the IP of the bridge network. Env: TESTENV_NETWORK_UDPLBNET_IP, fallback "10.100.0.1".
 	BridgeIP string
+	// VIP is the virtual IP address announced by LBs via BGP, derived from BridgeIP subnet.
+	VIP string
+}
+
+// computeVIP derives the VIP address from the bridge IP by replacing the last octet with defaultVIPSuffix.
+func computeVIP(bridgeIP string) string {
+	parts := strings.Split(bridgeIP, ".")
+	if len(parts) == 4 {
+		return strings.Join(parts[:3], ".") + "." + defaultVIPSuffix
+	}
+	return "10.100.0." + defaultVIPSuffix
 }
 
 // testenvVMState represents the structure of the testenv-vm state file.
@@ -115,19 +150,44 @@ func loadFromEnv() (*TestenvConfig, error) {
 	}
 
 	// VM IPs: use env var if set, otherwise fall back to static cloud-init IPs.
-	cfg.VM0IP = os.Getenv("TESTENV_VM_VM0_LB_IP")
-	if cfg.VM0IP == "" {
-		cfg.VM0IP = defaultVM0IP
+	cfg.RouterIP = os.Getenv("TESTENV_VM_ROUTER_IP")
+	if cfg.RouterIP == "" {
+		cfg.RouterIP = defaultRouterIP
 	}
 
-	cfg.VM1IP = os.Getenv("TESTENV_VM_VM1_LB_IP")
-	if cfg.VM1IP == "" {
-		cfg.VM1IP = defaultVM1IP
+	cfg.ClientIP = os.Getenv("TESTENV_VM_CLIENT_IP")
+	if cfg.ClientIP == "" {
+		cfg.ClientIP = defaultClientIP
 	}
 
-	cfg.VM2IP = os.Getenv("TESTENV_VM_VM2_LB_IP")
-	if cfg.VM2IP == "" {
-		cfg.VM2IP = defaultVM2IP
+	cfg.LB0IP = os.Getenv("TESTENV_VM_LB_0_IP")
+	if cfg.LB0IP == "" {
+		cfg.LB0IP = defaultLB0IP
+	}
+
+	cfg.LB1IP = os.Getenv("TESTENV_VM_LB_1_IP")
+	if cfg.LB1IP == "" {
+		cfg.LB1IP = defaultLB1IP
+	}
+
+	cfg.LB2IP = os.Getenv("TESTENV_VM_LB_2_IP")
+	if cfg.LB2IP == "" {
+		cfg.LB2IP = defaultLB2IP
+	}
+
+	cfg.BE0IP = os.Getenv("TESTENV_VM_BE_0_IP")
+	if cfg.BE0IP == "" {
+		cfg.BE0IP = defaultBE0IP
+	}
+
+	cfg.BE1IP = os.Getenv("TESTENV_VM_BE_1_IP")
+	if cfg.BE1IP == "" {
+		cfg.BE1IP = defaultBE1IP
+	}
+
+	cfg.BE2IP = os.Getenv("TESTENV_VM_BE_2_IP")
+	if cfg.BE2IP == "" {
+		cfg.BE2IP = defaultBE2IP
 	}
 
 	// Bridge IP: use env var if set, otherwise fall back to default.
@@ -135,6 +195,9 @@ func loadFromEnv() (*TestenvConfig, error) {
 	if cfg.BridgeIP == "" {
 		cfg.BridgeIP = defaultBridgeIP
 	}
+
+	// Derive VIP from bridge IP subnet.
+	cfg.VIP = computeVIP(cfg.BridgeIP)
 
 	return cfg, nil
 }
@@ -193,9 +256,14 @@ func loadFromStateFile() (*TestenvConfig, error) {
 
 	cfg := &TestenvConfig{
 		// Use static cloud-init IPs as defaults.
-		VM0IP:    defaultVM0IP,
-		VM1IP:    defaultVM1IP,
-		VM2IP:    defaultVM2IP,
+		RouterIP: defaultRouterIP,
+		ClientIP: defaultClientIP,
+		LB0IP:    defaultLB0IP,
+		LB1IP:    defaultLB1IP,
+		LB2IP:    defaultLB2IP,
+		BE0IP:    defaultBE0IP,
+		BE1IP:    defaultBE1IP,
+		BE2IP:    defaultBE2IP,
 		BridgeIP: defaultBridgeIP,
 	}
 
@@ -214,6 +282,9 @@ func loadFromStateFile() (*TestenvConfig, error) {
 		return nil, errors.Join(ErrStateFileNotFound,
 			errors.New("SSH key path not found in state file"))
 	}
+
+	// Derive VIP from bridge IP subnet.
+	cfg.VIP = computeVIP(cfg.BridgeIP)
 
 	return cfg, nil
 }

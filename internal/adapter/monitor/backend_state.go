@@ -117,21 +117,43 @@ terminate:
 	close(b.doneCh)
 }
 
-// probe attempts a UDP dial to the backend address and returns the
-// resulting state.
-//
-// LIMITATION: net.DialTimeout("udp", ...) resolves the address but does
-// not verify reachability because UDP is connectionless. A real health
-// check sends a probe packet and awaits a response. For MVP, the
-// dial-only approach is a placeholder that always reports StateAvailable
-// for any routable address.
+// probePayload is a 20-byte UDPLB-format packet sent to backends.
+// The echo-backend only echoes packets with the correct 4-byte prefix (0x55554944)
+// and at least 20 bytes (prefix + 16-byte UUID). The UUID is zeroed for health probes.
+var probePayload = []byte{
+	0x44, 0x49, 0x55, 0x55, // PacketPrefix 0x55554944 in little-endian
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UUID bytes 0-7
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UUID bytes 8-15
+}
+
+// probe sends a UDP echo probe to the backend and awaits a response.
+// If the backend echoes back within the timeout, it returns StateAvailable.
+// Any error (dial failure, write error, read timeout) returns StateUnavailable.
 func probe(spec types.BackendSpec, timeout time.Duration) types.State {
 	addr := net.JoinHostPort(spec.IP.String(), fmt.Sprintf("%d", spec.Port))
 	conn, err := net.DialTimeout("udp", addr, timeout)
 	if err != nil {
 		return types.StateUnavailable
 	}
-	_ = conn.Close()
+	defer func() { _ = conn.Close() }()
+
+	// Set write+read deadline to the timeout.
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return types.StateUnavailable
+	}
+
+	// Send probe payload.
+	if _, err := conn.Write(probePayload); err != nil {
+		return types.StateUnavailable
+	}
+
+	// Await echo response.
+	buf := make([]byte, len(probePayload))
+	if _, err := conn.Read(buf); err != nil {
+		// Timeout or read error means backend is not responding.
+		return types.StateUnavailable
+	}
+
 	return types.StateAvailable
 }
 

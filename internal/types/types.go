@@ -144,7 +144,7 @@ func GetConfig(filepath string) (Config, error) {
 		// TODO: unblock when reading from stdin
 		b, err = io.ReadAll(os.Stdin)
 	} else {
-		b, err = os.ReadFile(os.Args[1])
+		b, err = os.ReadFile(filepath)
 	}
 
 	if err != nil {

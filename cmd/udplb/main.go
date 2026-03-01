@@ -19,18 +19,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
+	"log/slog"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
-	bpfadapter "github.com/alexandremahdhaoui/udplb/internal/adapter/bpf"
+	"github.com/alexandremahdhaoui/udplb/internal/controller"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
-	"github.com/alexandremahdhaoui/udplb/internal/util"
-	"github.com/google/uuid"
 )
-
-// TODO: end to end test with qemu vms or so.
-// TODO: init a context w/ ifname & process name & use slog.{Info,Error}Context instead.
 
 const usage = `USAGE:
 	%s <config file path>
@@ -41,43 +37,32 @@ func main() {
 		fmtExit(usage, os.Args[0])
 	}
 
-	ctx := context.TODO()
-
-	// TODO: these values should come from config
-	_ = "todo" // name placeholder
-	instanceId := uuid.New()
-	iface, _ := net.InterfaceByName("todo")
-	ip := net.ParseIP("todo")
-	port := uint16(12345)
-	lookupTableSize := uint32(23)
-
-	// Create assignment watcher mux for the BPF manager
-	assignmentWatcherMux := util.NewWatcherMux[types.Assignment](100, util.NewDispatchFuncWithTimeout[types.Assignment](time.Second))
-
-	bpfProgram, manager, err := bpfadapter.New(instanceId, iface, ip, port, lookupTableSize, assignmentWatcherMux)
+	config, err := types.GetConfig(os.Args[1])
 	if err != nil {
 		errExit(err)
 	}
 
-	// move to controller
-	if err := bpfProgram.Run(ctx); err != nil {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
+
+	ctrl, err := controller.New(config)
+	if err != nil {
 		errExit(err)
 	}
 
-	// move to controller
-	if err := manager.Run(ctx); err != nil {
+	if err := ctrl.Run(ctx); err != nil {
 		errExit(err)
 	}
 
-	// TODO: move monitor adapter integration to controller
-	// var (
-	// 	bl monitoradapter.backendSpecList
-	// 	bs monitoradapter.backendState
-	// 	ra monitoradapter.remoteAssignment
-	// )
-	// blCh, blCancel := bl.Watch()
-	// bsCh, bsCancel := bs.Watch()
-	// raCh, raCancel := ra.Watch()
+	slog.Info("udplb started", "ifname", config.Ifname, "ip", config.IP, "port", config.Port)
+
+	// Block until signal.
+	<-ctx.Done()
+	slog.Info("shutting down...")
+
+	if err := ctrl.Close(); err != nil {
+		slog.Error("shutdown error", "err", err)
+	}
 }
 
 func fmtExit(format string, a ...any) {
