@@ -34,6 +34,8 @@ type udplbConfigT struct {
 	Port            uint16
 	_               [2]byte
 	LookupTableSize uint32
+	Mac             [6]uint8
+	_               [2]byte
 }
 
 // loadUdplb returns the embedded CollectionSpec for udplb.

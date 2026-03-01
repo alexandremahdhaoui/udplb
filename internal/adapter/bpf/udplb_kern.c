@@ -52,6 +52,9 @@ typedef struct {
     __u16 port;
     // The size of the lookup table.
     __u32 lookup_table_size;
+    // The loadbalancer's MAC address, used to rewrite ethh->h_source
+    // before XDP_TX to prevent L2 switch CAM table pollution.
+    unsigned char mac[ETH_ALEN];
 } config_t;
 
 // The config is a const. If users wants to update the loadbalancer's config
@@ -139,10 +142,12 @@ volatile __u32 lookup_table_a_len;
 volatile __u32 lookup_table_b_len;
 
 static __always_inline lookup_table_t *get_active_lookup_table() {
-    if (active_pointer) {
+    switch (active_pointer) {
+    case 0:
         return &lookup_table_a;
+    default:
+        return &lookup_table_b;
     }
-    return &lookup_table_b;
 }
 
 /*******************************************************************************
@@ -170,10 +175,12 @@ volatile __u32 session_map_a_len;
 volatile __u32 session_map_b_len;
 
 static __always_inline session_map_t *get_active_sessions() {
-    if (active_pointer) {
+    switch (active_pointer) {
+    case 0:
         return &session_map_a;
+    default:
+        return &session_map_b;
     }
-    return &session_map_b;
 }
 
 /*******************************************************************************
@@ -222,6 +229,25 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
 
     struct ethhdr *ethh = data;
     struct iphdr *iph = (struct iphdr *)(ethh + 1);
+
+    // Guard against XDP_TX loops caused by bridge hairpin reflection.
+    // After forwarding, h_source is set to config.mac. If the bridge
+    // reflects the packet back, we detect our own MAC as source and
+    // drop it instead of looping forever.
+    if (ethh->h_source[0] == config.mac[0] &&
+        ethh->h_source[1] == config.mac[1] &&
+        ethh->h_source[2] == config.mac[2] &&
+        ethh->h_source[3] == config.mac[3] &&
+        ethh->h_source[4] == config.mac[4] &&
+        ethh->h_source[5] == config.mac[5])
+        return XDP_DROP;
+
+    // TTL guard: secondary anti-loop mechanism. Each XDP_TX pass
+    // decrements TTL. If a packet loops despite the MAC check,
+    // it will be dropped when TTL reaches zero.
+    if (iph->ttl <= 1)
+        return XDP_DROP;
+    iph->ttl--;
     struct udphdr *udph = (struct udphdr *)(iph + 1);
     struct udpdata *udpd = (struct udpdata *)(udph + 1);
     debug_recv(ethh, iph);
@@ -234,14 +260,17 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     lookup_table_t *lup = get_active_lookup_table();
     session_map_t *sess = get_active_sessions();
 
-    // -- compute key from session id & get backend index from session map.
-    __u32 key = hash_modulo(udpd->session_id, __u128, config.lookup_table_size);
-    __u32 *backend_idx = bpf_map_lookup_elem(sess, &key);
+    // -- compute lookup table key from session id hash.
+    __u128 session_id = udpd->session_id;
+    __u32 lup_key = hash_modulo(session_id, __u128, config.lookup_table_size);
+
+    // -- get backend index from session map (keyed by full session id).
+    __u32 *backend_idx = bpf_map_lookup_elem(sess, &session_id);
     __u8 new_session = (backend_idx == NULL);
 
     // -- get idx from lookup table if new session
     if (new_session) {
-        backend_idx = bpf_map_lookup_elem(lup, &key);
+        backend_idx = bpf_map_lookup_elem(lup, &lup_key);
         if (backend_idx == NULL) {
             bpf_printk(
                 "[ERROR] cannot load balance packet: lookup table error");
@@ -256,16 +285,13 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
+    bpf_printk("[LB] idx=%d ip=0x%x port=%d",
+               *backend_idx, backend->ip, backend->port);
+
     // persist assignment if new session
     if (new_session) {
-        assignment_t *a;
-
-        // "notify" userland about this new assignment.
-        long err = bpf_map_push_elem(&assignment_ringbuf, &a, BPF_ANY);
-        if (err < 0) // Failing is fine
-            bpf_printk("[ERROR] unable to add new session to fifo");
-
-        a = bpf_ringbuf_reserve(&assignment_ringbuf, sizeof(assignment_t), 0);
+        assignment_t *a =
+            bpf_ringbuf_reserve(&assignment_ringbuf, sizeof(assignment_t), 0);
         if (a != NULL) {
             a->backend_id = backend->id;
             a->session_id = udpd->session_id;
@@ -275,7 +301,7 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
         }
 
         // persist "locally" (i.e. in the active bpf map)
-        err = bpf_map_update_elem(sess, &key, backend_idx, BPF_ANY);
+        long err = bpf_map_update_elem(sess, &session_id, backend_idx, BPF_ANY);
         if (err < 0) // Failing is fine.
             bpf_printk("[ERROR] unable to map new session");
     }
@@ -284,8 +310,21 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     // -- Update packet
     // -------------------------------
 
+    // NB: Explicit byte-by-byte copy instead of __builtin_memcpy.
+    // Clang constant-folds __builtin_memcpy from volatile const sources,
+    // evaluating config.mac at compile time (all zeros) instead of loading
+    // the runtime-patched .rodata values. Byte-by-byte loads force the
+    // compiler to emit actual loads from the .rodata map.
+    ethh->h_source[0] = config.mac[0];
+    ethh->h_source[1] = config.mac[1];
+    ethh->h_source[2] = config.mac[2];
+    ethh->h_source[3] = config.mac[3];
+    ethh->h_source[4] = config.mac[4];
+    ethh->h_source[5] = config.mac[5];
     __builtin_memcpy(ethh->h_dest, backend->mac, ETH_ALEN);
-    iph->daddr = bpf_htonl(backend->ip);
+    // NB: backend->ip is in native byte order, which matches the
+    //     representation stored in iph->daddr on this architecture.
+    iph->daddr = backend->ip;
     udph->dest = bpf_htons(backend->port);
 
     // -------------------------------
@@ -293,7 +332,12 @@ SEC("xdp") int udplb(struct xdp_md *ctx) {
     // -------------------------------
 
     iph->check = iphdr_csum(iph);
-    udph->check = udphdr_csum(udph);
+    // NB: Set UDP checksum to 0 (valid for IPv4 per RFC 768).
+    // Computing a correct UDP checksum requires the pseudo-header
+    // (src/dst IP, protocol, length) and the full payload, which is
+    // impractical in XDP.  A zero checksum tells the receiver to
+    // skip verification.
+    udph->check = 0;
 
     // -- debug logger
     debug_forw(ethh, iph);

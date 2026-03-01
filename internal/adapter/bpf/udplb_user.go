@@ -28,7 +28,7 @@ import (
 	"github.com/alexandremahdhaoui/tooling/pkg/flaterrors"
 	"github.com/alexandremahdhaoui/udplb/internal/types"
 	"github.com/alexandremahdhaoui/udplb/internal/util"
-	"github.com/cilium/ebpf/link"
+	ebpflink "github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/google/uuid"
 )
@@ -53,6 +53,8 @@ type runnable struct {
 	// -- bpf
 
 	objs *udplbObjects
+	// XDP link handle; must stay open for the XDP program to remain attached.
+	link ebpflink.Link
 
 	// -- mgmt
 
@@ -89,6 +91,7 @@ func New(
 		Ip:              util.NetIPv4ToUint32(ip),
 		Port:            port,
 		LookupTableSize: lookupTableSize,
+		Mac:             [6]uint8(iface.HardwareAddr),
 	}
 
 	// -- load bpf program
@@ -153,14 +156,14 @@ func (r *runnable) Run(ctx context.Context) error {
 
 	// -- Attach udplb to iface
 
-	link, err := link.AttachXDP(link.XDPOptions{
+	l, err := ebpflink.AttachXDP(ebpflink.XDPOptions{
 		Program:   r.objs.Udplb,
 		Interface: r.iface.Index,
 	})
 	if err != nil {
 		return flaterrors.Join(err, ErrRunningUdplbUserlandProgram)
 	}
-	defer func() { _ = link.Close() }()
+	r.link = l
 
 	r.running = true
 	slog.InfoContext(ctx, "XDP program loaded successfully", "ifname", r.iface.Name)
@@ -206,6 +209,7 @@ func (r *runnable) Close() error {
 	var errs error
 	for _, f := range []func() error{
 		r.closePropagationFunc,
+		r.link.Close,
 		r.objs.Close,
 	} {
 		if err := f(); err != nil {

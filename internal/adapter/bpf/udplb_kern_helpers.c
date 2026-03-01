@@ -68,7 +68,9 @@ static __always_inline _Bool must_loadbalance(void *data, void *data_end,
         return 0;
 
     // -- Check if dest addr is the loadbalancer's IP.
-    if (iph->daddr != bpf_htonl(lb_addr))
+    // NB: lb_addr is in native byte order (same representation as CPU reads
+    //     from iph->daddr), so compare directly without bpf_htonl.
+    if (iph->daddr != lb_addr)
         return 0;
 
     // -- Check if protocol is UDP
@@ -80,10 +82,9 @@ static __always_inline _Bool must_loadbalance(void *data, void *data_end,
     if ((void *)(udph + 1) > data_end)
         return 0;
 
-    // -- Check if dest addr is the loadbalancer's IP.
-    if (udph->dest != bpf_htons(lb_port)) {
+    // -- Check if dest port is the loadbalancer's port.
+    if (udph->dest != bpf_htons(lb_port))
         return 0;
-    }
 
     // -- Check udpdata
     // The udp data is prefixed by a 4 byte pattern equal to [0x55, 0x55, 0x49,
@@ -95,6 +96,8 @@ static __always_inline _Bool must_loadbalance(void *data, void *data_end,
     if (udpd->prefix != UDPLB_PACKET_PREFIX)
         return 0;
 
+    bpf_printk("[MLBDBG] MATCH: daddr=0x%x port=%d", iph->daddr,
+               bpf_ntohs(udph->dest));
     return 1;
 }
 
@@ -114,7 +117,7 @@ static __always_inline __u16 csum(__u32 *hdr, __u32 size) {
         csum = (csum & 0xffff) + (csum >> 16);
     }
 
-    return csum;
+    return ~csum;
 }
 
 // computes the __u16 checksum of the iphdr.
@@ -134,7 +137,7 @@ static __always_inline __u16 udphdr_csum(struct udphdr *udph) {
 // ---------------------------------------------------------------------------
 
 // computes the hash of x of size y and return its z modulo
-#define hash_modulo(x, y, z) fast_hash((const char *)x, sizeof(y)) % z
+#define hash_modulo(x, y, z) fast_hash((const char *)&(x), sizeof(y)) % z
 
 // computes a fast hash
 // TODO: benchmark this func w/ other hash funcs.

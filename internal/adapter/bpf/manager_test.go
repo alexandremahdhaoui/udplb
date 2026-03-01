@@ -38,7 +38,7 @@ func TestDataStructureManager(t *testing.T) {
 	var (
 		mgr bpfadapter.DataStructureManager
 
-		backendList    *fakebpfstruct.Array[*bpfadapter.BackendSpec]
+		backendList    *fakebpfstruct.Array[bpfadapter.BackendSpec]
 		lookupTable    *fakebpfstruct.Array[uint32]
 		assignmentFifo *fakebpfstruct.FIFO[bpfadapter.Assignment]
 		sessionMap     *fakebpfstruct.Map[uuid.UUID, uint32]
@@ -47,7 +47,7 @@ func TestDataStructureManager(t *testing.T) {
 	setup := func(t *testing.T) func() {
 		t.Helper()
 
-		backendList = fakebpfstruct.NewArray[*bpfadapter.BackendSpec]()
+		backendList = fakebpfstruct.NewArray[bpfadapter.BackendSpec]()
 		lookupTable = fakebpfstruct.NewArray[uint32]()
 		assignmentFifo = fakebpfstruct.NewFIFO[bpfadapter.Assignment]()
 		sessionMap = fakebpfstruct.NewMap[uuid.UUID, uint32]()
@@ -160,6 +160,12 @@ func TestDataStructureManager(t *testing.T) {
 				assert.True(t, ok)
 				delete(expected, actual)
 			}
+
+			// Wait for the manager's event loop to fully terminate after the
+			// FIFO channel close triggers internal shutdown. Without this,
+			// the goroutine above still references `assignmentFifo` and races
+			// with the next subtest's setup() overwriting it.
+			<-mgr.Done()
 		})
 	})
 

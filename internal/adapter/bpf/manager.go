@@ -173,7 +173,7 @@ const (
 
 // All objects must be set.
 type eventObjects struct {
-	BackendList []*udplbBackendSpecT
+	BackendList []udplbBackendSpecT
 	LookupTable []uint32
 	SessionMap  map[uuid.UUID]uint32
 }
@@ -469,11 +469,11 @@ func (mgr *dsManager) setObjects(objs eventObjects) error {
 	return nil
 }
 
-func transformBackendList(in []types.Backend) (out []*udplbBackendSpecT) {
-	out = make([]*udplbBackendSpecT, len(in))
+func transformBackendList(in []types.Backend) (out []udplbBackendSpecT) {
+	out = make([]udplbBackendSpecT, len(in))
 
 	for i, b := range in {
-		out[i] = &udplbBackendSpecT{
+		out[i] = udplbBackendSpecT{
 			Id:   b.Id,
 			Ip:   util.NetIPv4ToUint32(b.Spec.IP),
 			Port: uint16(b.Spec.Port),

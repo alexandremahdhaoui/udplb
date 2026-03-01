@@ -41,7 +41,7 @@ type Objects struct {
 	// NB:
 	// - n is defined as the number of available backends.
 	// - n' is defined as the number of backends, e.g. in StateAvailable, StateUnschedulable...
-	BackendList ebpfstruct.Array[*BackendSpec]
+	BackendList ebpfstruct.Array[BackendSpec]
 
 	// LookupTable is a BPFArray of uint32 and of size m.
 	// The integers stored in this list represents the index of an available backend in the
@@ -84,7 +84,7 @@ type Objects struct {
 // available anymore, either because they are closed or the bpf program
 // is closed.
 func newObjects(objs *udplbObjects, doneCh <-chan struct{}) (Objects, error) {
-	backendList, err := ebpfstruct.NewArray[*udplbBackendSpecT](
+	backendList, err := ebpfstruct.NewArray[udplbBackendSpecT](
 		objs.BackendListA,
 		objs.BackendListB,
 		objs.BackendListA_len,
