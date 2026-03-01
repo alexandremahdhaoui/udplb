@@ -17,6 +17,7 @@
 ## Table of Contents
 
 - [How do I run UDPLB?](#how-do-i-run-udplb)
+- [How do I deploy UDPLB with BGP ECMP?](#how-do-i-deploy-udplb-with-bgp-ecmp)
 - [How does UDPLB route packets?](#how-does-udplb-route-packets)
 - [How does UDPLB handle backend failures?](#how-does-udplb-handle-backend-failures)
 - [How do multiple UDPLB instances coordinate?](#how-do-multiple-udplb-instances-coordinate)
@@ -56,6 +57,18 @@ Send a test packet (4-byte prefix `UUID` + 16-byte session ID):
 ```shell
 echo -n "UUID$(head -c 16 /dev/urandom)" | nc -u 10.0.0.1 9000
 ```
+
+## How do I deploy UDPLB with BGP ECMP?
+
+A production deployment runs 3+ UDPLB instances behind a BGP router with ECMP. Each LB announces a shared VIP, the router distributes traffic across all LBs, and XDP forwards packets to backends at L2.
+
+The [deployment guide](./docs/deployment.md) covers:
+
+- Network topology and IP assignment
+- Router configuration (FRR BGP, ECMP, sysctl)
+- Load balancer configuration (VIP on loopback, ARP settings, FRR BGP)
+- Backend and client configuration
+- Verification steps
 
 ## How does UDPLB route packets?
 

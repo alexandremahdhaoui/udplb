@@ -73,7 +73,7 @@ PR description format:
 | `lint-licenses`  | `forge test run lint-licenses`| Apache 2.0 license headers on `.go`/`.c`/`.h` |
 | `lint`           | `forge test run lint`         | golangci-lint                                |
 | `unit`           | `forge test run unit`         | Unit tests                                   |
-| `e2e`            | `forge test run e2e`          | 3 Ubuntu 24.04 VMs via libvirt (testenv-vm)  |
+| `e2e`            | `forge test run e2e`          | 8 Ubuntu 24.04 VMs via libvirt (testenv-vm)  |
 
 Run all stages sequentially (stops on first failure):
 
@@ -85,7 +85,7 @@ Use `forge test run unit` and `forge test run lint` for fast iteration during de
 
 ### Test environment management
 
-E2E tests provision 3 VMs (`vm0-lb`, `vm1-lb`, `vm2-lb`) on a NAT network (`192.168.200.0/24`). They require libvirt and [testenv-vm](https://github.com/alexandremahdhaoui/testenv-vm).
+E2E tests provision 8 VMs (1 router, 1 client, 3 LBs, 3 backends) on a flat L2 network (`10.100.0.0/24`) with BGP ECMP routing. They require libvirt and [testenv-vm](https://github.com/alexandremahdhaoui/testenv-vm). See [docs/deployment.md](./docs/deployment.md) for the network topology.
 
 ```shell
 forge test-create e2e           # Provision VMs without running tests
@@ -157,7 +157,7 @@ test/
 | `lint-licenses` | `generic-test-runner` | Run `hack/ensure-licenses.sh` to check license headers |
 | `lint`          | `go-lint`           | Run golangci-lint                                      |
 | `unit`          | `go-test`           | Run unit tests (`//go:build unit`)                     |
-| `e2e`           | `go-test` + testenv | Provision 3 VMs, run E2E tests (`//go:build e2e`)     |
+| `e2e`           | `go-test` + testenv | Provision 8 VMs, run E2E tests (`//go:build e2e`)     |
 
 ## What does each package do?
 

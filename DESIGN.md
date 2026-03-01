@@ -338,7 +338,7 @@ over any data structure that satisfies the interface.
 - **Unit tests** (build tag: `unit`): state machines, `DataStructureManager`, `WatcherMux`. Run via `forge test run unit`.
 - **Benchmarks** (build tag: `benchmark`): RLT algorithm variants -- measures consistency across backend additions and removals.
 - **Integration tests** (build tag: `integration`): eBPF kernel program loading verification (stub).
-- **E2E tests** (build tag: `e2e`): 3 Ubuntu 24.04 VMs via testenv-vm (libvirt). Tests cover SSH reachability, binary deployment, UDP connectivity, and network interface verification. Run via `forge test run e2e`.
+- **E2E tests** (build tag: `e2e`): 8 Ubuntu 24.04 VMs via testenv-vm (libvirt) -- 1 router, 1 client, 3 LBs, 3 backends on a flat L2 network with BGP ECMP. Tests cover forwarding, session affinity, multi-session distribution, backend failover, LB failover, and BGP convergence. Run via `forge test run e2e`.
 - **Lint**: build tag enforcement (`lint-tags`), license header checks (`lint-licenses`), golangci-lint (`lint`).
 
 All tests run via `forge test-all`.
@@ -383,7 +383,7 @@ test:
   - name: lint-licenses        # Verify Apache 2.0 license headers
   - name: lint                 # golangci-lint
   - name: unit                 # Unit tests
-  - name: e2e                  # End-to-end tests (3 VMs)
+  - name: e2e                  # End-to-end tests (8 VMs: router, client, 3 LBs, 3 backends)
 ```
 
 ### UDPLB Datagram Format
